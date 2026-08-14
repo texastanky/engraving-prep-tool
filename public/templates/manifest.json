@@ -1,0 +1,269 @@
+{
+  "templates": [
+    {
+      "id": "sig-scroll-365-macro",
+      "source": "https://hercules-cdn.com/file_r0OsOcOwOSw2rbANOO0QZE4N",
+      "local": "/templates/sig-scroll-365-macro.svg",
+      "bytes": 15679888
+    },
+    {
+      "id": "sig-scroll-duo",
+      "source": "https://hercules-cdn.com/file_BI8SKrudHGR46wb6Yuyp9wAU",
+      "local": "/templates/sig-scroll-duo.svg",
+      "bytes": 24251897
+    },
+    {
+      "id": "sw-full",
+      "source": "https://hercules-cdn.com/file_d3cFFdxgJwXa59G0W692X8wk",
+      "local": "/templates/sw-full.svg",
+      "bytes": 1859126
+    },
+    {
+      "id": "colt",
+      "source": "https://hercules-cdn.com/file_woiUeGG1aiNG2MmMBNcugKFj",
+      "local": "/templates/colt.svg",
+      "bytes": 177786
+    },
+    {
+      "id": "glock-01",
+      "source": "https://hercules-cdn.com/file_NFRee39Dq0uR3YXpkLmRHJXx",
+      "local": "/templates/glock-01.svg",
+      "bytes": 7449
+    },
+    {
+      "id": "glock-02",
+      "source": "https://hercules-cdn.com/file_DZuGrBi4Dh0Qei8AwG3KC0QI",
+      "local": "/templates/glock-02.svg",
+      "bytes": 8016
+    },
+    {
+      "id": "glock-03",
+      "source": "https://hercules-cdn.com/file_jO5qWD6hU0fnGI2Akc8tbx2i",
+      "local": "/templates/glock-03.svg",
+      "bytes": 17501
+    },
+    {
+      "id": "glock-04",
+      "source": "https://hercules-cdn.com/file_37RRr85n4CQjUDUebWmBteKH",
+      "local": "/templates/glock-04.svg",
+      "bytes": 6436
+    },
+    {
+      "id": "glock-05",
+      "source": "https://hercules-cdn.com/file_vUUEjq32RKZ4CFMauoPb9iUc",
+      "local": "/templates/glock-05.svg",
+      "bytes": 8981
+    },
+    {
+      "id": "glock-06",
+      "source": "https://hercules-cdn.com/file_C3IeYuWgGlhf8ypanh3NbvdA",
+      "local": "/templates/glock-06.svg",
+      "bytes": 14594
+    },
+    {
+      "id": "glock-07",
+      "source": "https://hercules-cdn.com/file_vvDAnMbf1HnoOHcp0zqGH3Sp",
+      "local": "/templates/glock-07.svg",
+      "bytes": 16577
+    },
+    {
+      "id": "glock-08",
+      "source": "https://hercules-cdn.com/file_eykHcR8n9jNSH6xAIrTLzEAJ",
+      "local": "/templates/glock-08.svg",
+      "bytes": 10501
+    },
+    {
+      "id": "glock-09",
+      "source": "https://hercules-cdn.com/file_fwsPLoMgQ4ud7jRJJjFcXi02",
+      "local": "/templates/glock-09.svg",
+      "bytes": 7631
+    },
+    {
+      "id": "glock-10",
+      "source": "https://hercules-cdn.com/file_2xTK2hjQXDKGcv9uTeRcYPg4",
+      "local": "/templates/glock-10.svg",
+      "bytes": 10030
+    },
+    {
+      "id": "glock-11",
+      "source": "https://hercules-cdn.com/file_6U49i7KXhWagY0VmfNGS0YPu",
+      "local": "/templates/glock-11.svg",
+      "bytes": 8123
+    },
+    {
+      "id": "glock-12",
+      "source": "https://hercules-cdn.com/file_0lUun0LGnbyDIb21v5MS73nF",
+      "local": "/templates/glock-12.svg",
+      "bytes": 7838
+    },
+    {
+      "id": "glock-13",
+      "source": "https://hercules-cdn.com/file_Dmqx9z5UJDngq59jv9TP2N8F",
+      "local": "/templates/glock-13.svg",
+      "bytes": 7713
+    },
+    {
+      "id": "glock-14",
+      "source": "https://hercules-cdn.com/file_KgCPsHUOPx4ncsIPJ81bnx05",
+      "local": "/templates/glock-14.svg",
+      "bytes": 9845
+    },
+    {
+      "id": "glock-15",
+      "source": "https://hercules-cdn.com/file_7dygQsy4pYm9Oi8kOutHb0Yv",
+      "local": "/templates/glock-15.svg",
+      "bytes": 8978
+    },
+    {
+      "id": "glock-16",
+      "source": "https://hercules-cdn.com/file_5EhWZsjXZ9nOAH0rogyEKNTS",
+      "local": "/templates/glock-16.svg",
+      "bytes": 7331
+    },
+    {
+      "id": "glock-17",
+      "source": "https://hercules-cdn.com/file_xYByExHUGG2sDI6WHHzh0r6v",
+      "local": "/templates/glock-17.svg",
+      "bytes": 10481
+    },
+    {
+      "id": "glock-18",
+      "source": "https://hercules-cdn.com/file_QoDiqbLitfljifr55X822Cd4",
+      "local": "/templates/glock-18.svg",
+      "bytes": 7720
+    },
+    {
+      "id": "glock-19",
+      "source": "https://hercules-cdn.com/file_SCJIVrozJQLhjvob9o4N2xur",
+      "local": "/templates/glock-19.svg",
+      "bytes": 16603
+    },
+    {
+      "id": "glock-20",
+      "source": "https://hercules-cdn.com/file_XPMSUqF8dyIx1GwjVUMMCqKS",
+      "local": "/templates/glock-20.svg",
+      "bytes": 13104
+    },
+    {
+      "id": "glock-21",
+      "source": "https://hercules-cdn.com/file_Of6JIf2Vf8A7289T933u9ZN3",
+      "local": "/templates/glock-21.svg",
+      "bytes": 9833
+    },
+    {
+      "id": "glock-22",
+      "source": "https://hercules-cdn.com/file_1QmEfqsXW4u0r53CYQjB8OnP",
+      "local": "/templates/glock-22.svg",
+      "bytes": 34119
+    },
+    {
+      "id": "glock-23",
+      "source": "https://hercules-cdn.com/file_5y1r2YTVB5UNdzG1Y0SQCOl7",
+      "local": "/templates/glock-23.svg",
+      "bytes": 7087
+    },
+    {
+      "id": "glock-24",
+      "source": "https://hercules-cdn.com/file_KPvuyBJFNRceZ47c2XtqTXJ7",
+      "local": "/templates/glock-24.svg",
+      "bytes": 8688
+    },
+    {
+      "id": "glock-25",
+      "source": "https://hercules-cdn.com/file_M5XxNGwYUb52wYz94K8N21MH",
+      "local": "/templates/glock-25.svg",
+      "bytes": 9863
+    },
+    {
+      "id": "glock-26",
+      "source": "https://hercules-cdn.com/file_O463Zy6RLFkfegTBtM7yVpmE",
+      "local": "/templates/glock-26.svg",
+      "bytes": 7843
+    },
+    {
+      "id": "glock-27",
+      "source": "https://hercules-cdn.com/file_SR3HFEoyh3idIu70kOEgnXqj",
+      "local": "/templates/glock-27.svg",
+      "bytes": 7861
+    },
+    {
+      "id": "glock-28",
+      "source": "https://hercules-cdn.com/file_XM7xIIQNS3WqnOHgTjgq4mQd",
+      "local": "/templates/glock-28.svg",
+      "bytes": 8722
+    },
+    {
+      "id": "glock-29",
+      "source": "https://hercules-cdn.com/file_0DbJXCamuF4eLLuW5za2WLdk",
+      "local": "/templates/glock-29.svg",
+      "bytes": 9153
+    },
+    {
+      "id": "glock-30",
+      "source": "https://hercules-cdn.com/file_5KRAwVKhj6xqsW3EwwBGMGng",
+      "local": "/templates/glock-30.svg",
+      "bytes": 14686
+    },
+    {
+      "id": "glock-31",
+      "source": "https://hercules-cdn.com/file_n7upEpIvvo2JPOYS394Q9HaG",
+      "local": "/templates/glock-31.svg",
+      "bytes": 11927
+    },
+    {
+      "id": "glock-32",
+      "source": "https://hercules-cdn.com/file_4Gb4YHKU1J0fmqu4HjYeViiK",
+      "local": "/templates/glock-32.svg",
+      "bytes": 9955
+    },
+    {
+      "id": "glock-33",
+      "source": "https://hercules-cdn.com/file_U4rZWgewuJYEXAgMDh2uPoew",
+      "local": "/templates/glock-33.svg",
+      "bytes": 12473
+    },
+    {
+      "id": "glock-34",
+      "source": "https://hercules-cdn.com/file_SzGl6UohQtv3hsLugQ0NssrN",
+      "local": "/templates/glock-34.svg",
+      "bytes": 8351
+    },
+    {
+      "id": "springfield-bundle",
+      "source": "https://hercules-cdn.com/file_ADAdrJdit4AACy1av533gbg9",
+      "local": "/templates/springfield-bundle.svg",
+      "bytes": 1382692
+    },
+    {
+      "id": "taurus-ready",
+      "source": "https://hercules-cdn.com/file_YO6sETB7EWE6y6hec9RGCzOC",
+      "local": "/templates/taurus-ready.svg",
+      "bytes": 1688477
+    },
+    {
+      "id": "kimber",
+      "source": "https://hercules-cdn.com/file_t07ijbKHanrp3WTRhHKl0LzH",
+      "local": "/templates/kimber.svg",
+      "bytes": 398057
+    },
+    {
+      "id": "kimber-2",
+      "source": "https://hercules-cdn.com/file_67kSwJsCAy22F6K2McnfPPsF",
+      "local": "/templates/kimber-2.svg",
+      "bytes": 398057
+    },
+    {
+      "id": "ar15-scroll-pattern",
+      "source": "https://hercules-cdn.com/file_yF4LGuUyQmHPeHt8DCW61nlR",
+      "local": "/templates/ar15-scroll-pattern.svg",
+      "bytes": 4518823
+    },
+    {
+      "id": "ar15-topography",
+      "source": "https://hercules-cdn.com/file_UIfJqAVz0Mqu0UOb4vmrbNfL",
+      "local": "/templates/ar15-topography.svg",
+      "bytes": 1704603
+    }
+  ],
+  "failures": []
+}

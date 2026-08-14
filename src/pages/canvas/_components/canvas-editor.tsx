@@ -101,6 +101,7 @@ const DEFAULT_FILTERS: ImageFilters = {
 };
 
 const SCREEN_DPI = 96;
+const HISTORY_LIMIT = 80;
 
 // --- Helpers ---
 
@@ -112,60 +113,92 @@ function displayToInches(pixels: number, displayPixels: number, materialInches: 
   return (pixels / displayPixels) * materialInches;
 }
 
-function applyFiltersToCanvas(
-  src: HTMLImageElement,
-  filters: ImageFilters,
-  w: number,
-  h: number
-): HTMLCanvasElement {
-  const off = document.createElement("canvas");
-  off.width = w;
-  off.height = h;
-  const ctx = off.getContext("2d");
-  if (!ctx) return off;
-  ctx.filter = [
+function canvasFilterCss(filters: ImageFilters): string {
+  return [
     `brightness(${filters.brightness}%)`,
     `contrast(${filters.contrast}%)`,
     `grayscale(${filters.grayscale}%)`,
     `invert(${filters.invert}%)`,
   ].join(" ");
-  ctx.drawImage(src, 0, 0, w, h);
-  return off;
+}
+
+function cloneImageState(state: ImageState): ImageState {
+  return {
+    ...state,
+    filters: { ...state.filters },
+  };
+}
+
+function imageStateSignature(state: ImageState): string {
+  const src = state.element.currentSrc || state.element.src || "";
+  return JSON.stringify({
+    src: `${src.length}:${src.slice(0, 120)}`,
+    x: Number(state.x.toFixed(2)),
+    y: Number(state.y.toFixed(2)),
+    scale: Number(state.scale.toFixed(4)),
+    scaleX: Number(state.scaleX.toFixed(4)),
+    scaleY: Number(state.scaleY.toFixed(4)),
+    rotation: Number(state.rotation.toFixed(2)),
+    opacity: Number(state.opacity.toFixed(4)),
+    flipH: state.flipH,
+    flipV: state.flipV,
+    filters: state.filters,
+  });
 }
 
 // --- Main Component ---
 
 function TemplateThumbnail({ url, name }: { url: string; name: string }) {
-  const [objectUrl, setObjectUrl] = React.useState<string | null>(null);
+  const [previewSrc, setPreviewSrc] = React.useState<string | null>(null);
   const [failed, setFailed] = React.useState(false);
 
   React.useEffect(() => {
-    let revoked = false;
+    let active = true;
+    let objectUrl: string | null = null;
+
+    setFailed(false);
+    setPreviewSrc(null);
+
+    if (!url.startsWith("http")) {
+      setPreviewSrc(url);
+      return () => {
+        active = false;
+      };
+    }
+
     fetch(url)
       .then((r) => r.blob())
       .then((blob) => {
         const typed = new Blob([blob], { type: "image/svg+xml" });
-        const ou = URL.createObjectURL(typed);
-        if (!revoked) setObjectUrl(ou);
+        objectUrl = URL.createObjectURL(typed);
+        if (active) {
+          setPreviewSrc(objectUrl);
+        } else {
+          URL.revokeObjectURL(objectUrl);
+        }
       })
-      .catch(() => { if (!revoked) setFailed(true); });
+      .catch(() => { if (active) setFailed(true); });
+
     return () => {
-      revoked = true;
+      active = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   return (
     <>
-      {objectUrl && (
+      {previewSrc && (
         <img
-          src={objectUrl}
+          src={previewSrc}
           alt={name}
           className="w-full h-full object-contain"
+          onError={() => {
+            setPreviewSrc(null);
+            setFailed(true);
+          }}
         />
       )}
-      {!objectUrl && !failed && (
+      {!previewSrc && !failed && (
         <div className="absolute inset-0 flex items-center justify-center">
           <span className="text-[8px] text-gray-400 animate-pulse">Loading…</span>
         </div>
@@ -193,18 +226,29 @@ export default function CanvasEditor() {
   // Design real-world size inputs (in current unit)
   const [designWidthInput, setDesignWidthInput] = useState("");
   const [designHeightInput, setDesignHeightInput] = useState("");
+  const [uploadError, setUploadError] = useState<string | null>(null);
 
   // Undo/redo history
   const historyRef = useRef<ImageState[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const skipHistoryRef = useRef(false);
+  const continuousEditRef = useRef(false);
+  const lastHistorySignatureRef = useRef<string | null>(null);
 
   const pushHistory = useCallback((state: ImageState) => {
     if (skipHistoryRef.current) return;
+    const snapshot = cloneImageState(state);
+    const signature = imageStateSignature(snapshot);
+    if (signature === lastHistorySignatureRef.current) return;
+
     // Drop any future states if we're mid-history
     historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
-    historyRef.current.push(state);
+    historyRef.current.push(snapshot);
+    if (historyRef.current.length > HISTORY_LIMIT) {
+      historyRef.current = historyRef.current.slice(-HISTORY_LIMIT);
+    }
     historyIndexRef.current = historyRef.current.length - 1;
+    lastHistorySignatureRef.current = signature;
   }, []);
 
   const [canUndo, setCanUndo] = useState(false);
@@ -219,8 +263,9 @@ export default function CanvasEditor() {
     if (historyIndexRef.current <= 0) return;
     historyIndexRef.current -= 1;
     skipHistoryRef.current = true;
-    setDesign(historyRef.current[historyIndexRef.current]);
-    skipHistoryRef.current = false;
+    const restored = cloneImageState(historyRef.current[historyIndexRef.current]);
+    lastHistorySignatureRef.current = imageStateSignature(restored);
+    setDesign(restored);
     updateUndoRedoState();
   }, [updateUndoRedoState]);
 
@@ -228,8 +273,9 @@ export default function CanvasEditor() {
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
     historyIndexRef.current += 1;
     skipHistoryRef.current = true;
-    setDesign(historyRef.current[historyIndexRef.current]);
-    skipHistoryRef.current = false;
+    const restored = cloneImageState(historyRef.current[historyIndexRef.current]);
+    lastHistorySignatureRef.current = imageStateSignature(restored);
+    setDesign(restored);
     updateUndoRedoState();
   }, [updateUndoRedoState]);
 
@@ -240,10 +286,31 @@ export default function CanvasEditor() {
 
   // Track design changes into history
   useEffect(() => {
-    if (!design || skipHistoryRef.current) return;
+    if (!design) return;
+    if (skipHistoryRef.current) {
+      skipHistoryRef.current = false;
+      updateUndoRedoState();
+      return;
+    }
+    if (isDragging || continuousEditRef.current) return;
     pushHistory(design);
     updateUndoRedoState();
-  }, [design, pushHistory, updateUndoRedoState]);
+  }, [design, isDragging, pushHistory, updateUndoRedoState]);
+
+  const updateDesignContinuously = useCallback((next: ImageState) => {
+    continuousEditRef.current = true;
+    setDesign(next);
+  }, []);
+
+  const commitDesignChange = useCallback(
+    (next: ImageState) => {
+      continuousEditRef.current = false;
+      setDesign(next);
+      pushHistory(next);
+      updateUndoRedoState();
+    },
+    [pushHistory, updateUndoRedoState]
+  );
 
   // Responsive sizing
   useEffect(() => {
@@ -318,9 +385,9 @@ export default function CanvasEditor() {
       if (design.flipH) ctx.scale(-1, 1);
       if (design.flipV) ctx.scale(1, -1);
 
-      // Apply filters via offscreen canvas
-      const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH);
-      ctx.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
+      ctx.filter = canvasFilterCss(design.filters);
+      ctx.drawImage(design.element, -imgW / 2, -imgH / 2, imgW, imgH);
+      ctx.filter = "none";
       ctx.restore();
     }
 
@@ -412,7 +479,7 @@ export default function CanvasEditor() {
 
   const loadDesign = useCallback(
     (src: string) => {
-      const applyImg = (imgSrc: string) => {
+      const applyImg = (imgSrc: string, revokeAfterLoad?: string) => {
         const img = new Image();
         img.onload = () => {
           // SVGs without explicit width/height report 0 — fall back to a sensible default
@@ -446,22 +513,25 @@ export default function CanvasEditor() {
             setDesignWidthInput(inToMm(widthIn).toFixed(1));
             setDesignHeightInput(inToMm(heightIn).toFixed(1));
           }
+          if (revokeAfterLoad) URL.revokeObjectURL(revokeAfterLoad);
+        };
+        img.onerror = () => {
+          if (revokeAfterLoad) URL.revokeObjectURL(revokeAfterLoad);
         };
         img.src = imgSrc;
       };
 
-      if (src.startsWith("data:") || src.startsWith("blob:")) {
+      if (src.startsWith("data:") || src.startsWith("blob:") || !src.startsWith("http")) {
         // Local file (drag & drop or file picker) — load directly
         applyImg(src);
       } else {
-        // Remote URL (template CDN) — all templates are SVGs
-        // Same approach as TemplateThumbnail which works correctly
+        // Remote fallback for older template links.
         fetch(src)
           .then((r) => r.blob())
           .then((blob) => {
             const typed = new Blob([blob], { type: "image/svg+xml" });
             const objectUrl = URL.createObjectURL(typed);
-            applyImg(objectUrl);
+            applyImg(objectUrl, objectUrl);
           })
           .catch(() => {});
       }
@@ -471,7 +541,16 @@ export default function CanvasEditor() {
 
   const readFile = (file: File, onLoad: (src: string) => void) => {
     const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
-    if (!file.type.startsWith("image/") && !isSvg) return;
+    const name = file.name.toLowerCase();
+    if (!file.type.startsWith("image/") && !isSvg) {
+      setUploadError(
+        name.endsWith(".ai") || name.endsWith(".pdf")
+          ? "Convert AI or PDF artwork to SVG or PNG before importing."
+          : "Upload an image file or SVG artwork."
+      );
+      return;
+    }
+    setUploadError(null);
     const reader = new FileReader();
     reader.onload = (ev) => onLoad(ev.target?.result as string);
     reader.readAsDataURL(file);
@@ -636,7 +715,7 @@ export default function CanvasEditor() {
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [design]);
+  }, [design, handleUndo, handleRedo]);
 
   // Quick actions
   const handleFill = useCallback(() => {
@@ -698,8 +777,9 @@ export default function CanvasEditor() {
       ctx.rotate((design.rotation * Math.PI) / 180);
       if (design.flipH) ctx.scale(-1, 1);
       if (design.flipV) ctx.scale(1, -1);
-      const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH);
-      ctx.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
+      ctx.filter = canvasFilterCss(design.filters);
+      ctx.drawImage(design.element, -imgW / 2, -imgH / 2, imgW, imgH);
+      ctx.filter = "none";
       ctx.restore();
     }
     return offscreen;
@@ -781,7 +861,12 @@ export default function CanvasEditor() {
 
   const updateFilter = (key: keyof ImageFilters, value: number) => {
     if (!design) return;
-    setDesign({ ...design, filters: { ...design.filters, [key]: value } });
+    updateDesignContinuously({ ...design, filters: { ...design.filters, [key]: value } });
+  };
+
+  const commitFilter = (key: keyof ImageFilters, value: number) => {
+    if (!design) return;
+    commitDesignChange({ ...design, filters: { ...design.filters, [key]: value } });
   };
 
   const resetFilters = () => {
@@ -1048,7 +1133,7 @@ export default function CanvasEditor() {
                 <span className="flex items-center justify-center w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">3</span>
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">Engraving Design</Label>
               </div>
-              <input ref={designInputRef} type="file" accept="image/*" onChange={handleDesignUpload} className="hidden" />
+              <input ref={designInputRef} type="file" accept="image/*,.svg" onChange={handleDesignUpload} className="hidden" />
               <Button
                 variant={design ? "ghost" : "secondary"}
                 className="w-full"
@@ -1065,6 +1150,9 @@ export default function CanvasEditor() {
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5" /> Remove Design
                 </Button>
+              )}
+              {uploadError && (
+                <p className="text-[10px] text-destructive">{uploadError}</p>
               )}
               <p className="text-[10px] text-muted-foreground opacity-60">Your artwork — drag to reposition on the canvas</p>
             </div>
@@ -1179,7 +1267,8 @@ export default function CanvasEditor() {
                         min={1}
                         max={500}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, scale: v / 100 })}
+                        onValueChange={([v]) => updateDesignContinuously({ ...design, scale: v / 100 })}
+                        onValueCommit={([v]) => commitDesignChange({ ...design, scale: v / 100 })}
                       />
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" className="flex-1 h-7 text-xs" onClick={() => setDesign({ ...design, scale: Math.max(design.scale * 0.9, 0.01) })}><ZoomOut className="h-3 w-3" /></Button>
@@ -1200,7 +1289,8 @@ export default function CanvasEditor() {
                         min={0}
                         max={360}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, rotation: v })}
+                        onValueChange={([v]) => updateDesignContinuously({ ...design, rotation: v })}
+                        onValueCommit={([v]) => commitDesignChange({ ...design, rotation: v })}
                       />
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" className="flex-1 h-7 text-xs" onClick={() => setDesign({ ...design, rotation: (design.rotation + 90) % 360 })}>+90°</Button>
@@ -1239,7 +1329,8 @@ export default function CanvasEditor() {
                         min={10}
                         max={100}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, opacity: v / 100 })}
+                        onValueChange={([v]) => updateDesignContinuously({ ...design, opacity: v / 100 })}
+                        onValueCommit={([v]) => commitDesignChange({ ...design, opacity: v / 100 })}
                       />
                     </div>
 
@@ -1292,6 +1383,7 @@ export default function CanvasEditor() {
                         value={[design.filters.grayscale]}
                         min={0} max={100} step={1}
                         onValueChange={([v]) => updateFilter("grayscale", v)}
+                        onValueCommit={([v]) => commitFilter("grayscale", v)}
                       />
                     </div>
 
@@ -1307,6 +1399,7 @@ export default function CanvasEditor() {
                         value={[design.filters.brightness]}
                         min={0} max={200} step={1}
                         onValueChange={([v]) => updateFilter("brightness", v)}
+                        onValueCommit={([v]) => commitFilter("brightness", v)}
                       />
                     </div>
 
@@ -1322,6 +1415,7 @@ export default function CanvasEditor() {
                         value={[design.filters.contrast]}
                         min={0} max={200} step={1}
                         onValueChange={([v]) => updateFilter("contrast", v)}
+                        onValueCommit={([v]) => commitFilter("contrast", v)}
                       />
                     </div>
 
@@ -1335,6 +1429,7 @@ export default function CanvasEditor() {
                         value={[design.filters.invert]}
                         min={0} max={100} step={1}
                         onValueChange={([v]) => updateFilter("invert", v)}
+                        onValueCommit={([v]) => commitFilter("invert", v)}
                       />
                     </div>
 
