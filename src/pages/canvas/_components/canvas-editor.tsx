@@ -837,6 +837,8 @@ export default function CanvasEditor() {
   // Material custom width/height input
   const [matWInput, setMatWInput] = useState("4.00");
   const [matHInput, setMatHInput] = useState("4.00");
+  const [templatesOpen, setTemplatesOpen] = useState(false);
+  const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
 
   const applyCustomMaterial = () => {
     const w = parseFloat(matWInput);
@@ -1158,54 +1160,75 @@ export default function CanvasEditor() {
             </div>
 
             {/* Templates */}
-            <div className="rounded-lg border border-border bg-card p-4 space-y-3">
-              <div className="flex items-center gap-2">
-                <LayoutTemplate className="h-4 w-4 text-primary shrink-0" />
-                <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">My Templates</Label>
-              </div>
-              {TEMPLATE_CATEGORIES.map((cat) => {
-                const catTemplates = ENGRAVING_TEMPLATES.filter((t) => t.category === cat);
-                const useGrid = catTemplates.length > 1;
-                return (
-                  <div key={cat} className="space-y-2">
-                    <p className="text-[10px] uppercase tracking-wider text-primary font-medium">{cat} <span className="text-muted-foreground normal-case">({catTemplates.length})</span></p>
-                    {useGrid ? (
-                      <div className="grid grid-cols-3 gap-1.5">
-                        {catTemplates.map((tmpl) => (
-                          <button
-                            key={tmpl.id}
-                            className="group relative rounded-md border border-border overflow-hidden hover:border-primary transition-colors cursor-pointer flex flex-col"
-                            onClick={() => loadDesign(tmpl.url)}
-                            title={tmpl.name}
-                          >
-                            <div className="w-full" style={{ aspectRatio: "4/3", backgroundColor: "#ffffff" }}>
-                              <TemplateThumbnail url={tmpl.url} name={tmpl.name} />
-                            </div>
-                            <div className="px-1 py-0.5 bg-secondary text-center">
-                              <span className="text-[9px] text-foreground leading-tight line-clamp-2">{tmpl.name}</span>
-                            </div>
-                          </button>
-                        ))}
+            <div className="rounded-lg border border-border bg-card overflow-hidden">
+              <button
+                className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-secondary/50 transition-colors cursor-pointer"
+                onClick={() => setTemplatesOpen((v) => !v)}
+              >
+                <div className="flex items-center gap-2">
+                  <LayoutTemplate className="h-4 w-4 text-primary shrink-0" />
+                  <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">My Templates</span>
+                </div>
+                <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${templatesOpen ? "rotate-180" : ""}`} />
+              </button>
+              {templatesOpen && (
+                <div className="px-4 pb-4 space-y-1 border-t border-border pt-3">
+                  {TEMPLATE_CATEGORIES.map((cat) => {
+                    const catTemplates = ENGRAVING_TEMPLATES.filter((t) => t.category === cat);
+                    const useGrid = catTemplates.length > 1;
+                    const catOpen = !!openCategories[cat];
+                    return (
+                      <div key={cat} className="rounded-md border border-border overflow-hidden">
+                        <button
+                          className="w-full flex items-center justify-between gap-2 px-3 py-2 hover:bg-secondary/50 transition-colors cursor-pointer"
+                          onClick={() => setOpenCategories((prev) => ({ ...prev, [cat]: !prev[cat] }))}
+                        >
+                          <span className="text-[10px] uppercase tracking-wider text-primary font-medium">{cat} <span className="text-muted-foreground normal-case">({catTemplates.length})</span></span>
+                          <ChevronDown className={`h-3 w-3 text-muted-foreground transition-transform duration-200 ${catOpen ? "rotate-180" : ""}`} />
+                        </button>
+                        {catOpen && (
+                          <div className="p-2 border-t border-border">
+                            {useGrid ? (
+                              <div className="grid grid-cols-3 gap-1.5">
+                                {catTemplates.map((tmpl) => (
+                                  <button
+                                    key={tmpl.id}
+                                    className="group relative rounded-md border border-border overflow-hidden hover:border-primary transition-colors cursor-pointer flex flex-col"
+                                    onClick={() => loadDesign(tmpl.url)}
+                                    title={tmpl.name}
+                                  >
+                                    <div className="w-full" style={{ aspectRatio: "4/3", backgroundColor: "#ffffff" }}>
+                                      <TemplateThumbnail url={tmpl.url} name={tmpl.name} />
+                                    </div>
+                                    <div className="px-1 py-0.5 bg-secondary text-center">
+                                      <span className="text-[9px] text-foreground leading-tight line-clamp-2">{tmpl.name}</span>
+                                    </div>
+                                  </button>
+                                ))}
+                              </div>
+                            ) : (
+                              <div className="flex flex-col gap-1.5">
+                                {catTemplates.map((tmpl) => (
+                                  <button
+                                    key={tmpl.id}
+                                    className="flex items-center gap-3 w-full rounded-md border border-border bg-secondary hover:border-primary hover:bg-secondary/80 transition-colors cursor-pointer px-3 py-2.5 text-left"
+                                    onClick={() => loadDesign(tmpl.url)}
+                                  >
+                                    <LayoutTemplate className="h-4 w-4 text-primary shrink-0 opacity-70" />
+                                    <span className="text-xs font-medium text-foreground truncate">{tmpl.name}</span>
+                                    <span className="ml-auto text-[10px] text-muted-foreground shrink-0">Load →</span>
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        )}
                       </div>
-                    ) : (
-                      <div className="flex flex-col gap-1.5">
-                        {catTemplates.map((tmpl) => (
-                          <button
-                            key={tmpl.id}
-                            className="flex items-center gap-3 w-full rounded-md border border-border bg-secondary hover:border-primary hover:bg-secondary/80 transition-colors cursor-pointer px-3 py-2.5 text-left"
-                            onClick={() => loadDesign(tmpl.url)}
-                          >
-                            <LayoutTemplate className="h-4 w-4 text-primary shrink-0 opacity-70" />
-                            <span className="text-xs font-medium text-foreground truncate">{tmpl.name}</span>
-                            <span className="ml-auto text-[10px] text-muted-foreground shrink-0">Load →</span>
-                          </button>
-                        ))}
-                      </div>
-                    )}
-                  </div>
-                );
-              })}
-              <p className="text-[10px] text-muted-foreground opacity-60">Click a template to load it as your design</p>
+                    );
+                  })}
+                  <p className="text-[10px] text-muted-foreground opacity-60 pt-1">Click a template to load it as your design</p>
+                </div>
+              )}
             </div>
 
             {/* Step 4: Adjust */}
