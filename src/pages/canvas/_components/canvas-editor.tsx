@@ -52,6 +52,7 @@ import {
   LayoutTemplate,
   Undo2,
   Redo2,
+  GripHorizontal,
 } from "lucide-react";
 import {
   MATERIAL_PRESETS,
@@ -93,6 +94,14 @@ type MaterialSize = {
   heightIn: number;
 };
 
+type ResizeDragState = {
+  edge: "right" | "bottom" | "corner";
+  startX: number;
+  startY: number;
+  startW: number;
+  startH: number;
+};
+
 const DEFAULT_FILTERS: ImageFilters = {
   brightness: 100,
   contrast: 100,
@@ -102,6 +111,7 @@ const DEFAULT_FILTERS: ImageFilters = {
 
 const SCREEN_DPI = 96;
 const HISTORY_LIMIT = 80;
+const RULER_THICKNESS = 20;
 
 // --- Helpers ---
 
@@ -223,6 +233,8 @@ export default function CanvasEditor() {
   const [material, setMaterial] = useState<MaterialSize>({ widthIn: 4.0, heightIn: 4.0 });
   const [selectedPresetId, setSelectedPresetId] = useState<string>("custom");
   const [showRuler, setShowRuler] = useState(true);
+  const [resizeMode, setResizeMode] = useState(false);
+  const [manualDisplaySize, setManualDisplaySize] = useState<{ w: number; h: number } | null>(null);
   // Design real-world size inputs (in current unit)
   const [designWidthInput, setDesignWidthInput] = useState("");
   const [designHeightInput, setDesignHeightInput] = useState("");
@@ -281,8 +293,17 @@ export default function CanvasEditor() {
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
+  const topRulerRef = useRef<HTMLCanvasElement>(null);
+  const leftRulerRef = useRef<HTMLCanvasElement>(null);
   const partInputRef = useRef<HTMLInputElement>(null);
   const designInputRef = useRef<HTMLInputElement>(null);
+  const resizeDragRef = useRef<ResizeDragState | null>(null);
+
+  useEffect(() => {
+    if (!resizeMode) {
+      setManualDisplaySize(null);
+    }
+  }, [resizeMode]);
 
   // Track design changes into history
   useEffect(() => {
@@ -325,16 +346,25 @@ export default function CanvasEditor() {
     return () => ro.disconnect();
   }, []);
 
-  // Canvas display size — driven by material aspect ratio
-  const maxW = Math.min(containerWidth - 8, 820);
+  // Canvas display size — driven by material aspect ratio, unless manually resized.
+  const availableWidth = Math.max(80, containerWidth - (showRuler ? RULER_THICKNESS : 0) - 8);
+  const maxW = Math.min(availableWidth, 820);
   const maxH = Math.min(window.innerHeight * 0.58, 520);
   const materialRatio = material.widthIn / material.heightIn;
 
-  let displayWidth = maxW;
-  let displayHeight = Math.round(displayWidth / materialRatio);
-  if (displayHeight > maxH) {
-    displayHeight = maxH;
-    displayWidth = Math.round(displayHeight * materialRatio);
+  let displayWidth: number;
+  let displayHeight: number;
+
+  if (resizeMode && manualDisplaySize) {
+    displayWidth = Math.max(manualDisplaySize.w, 80);
+    displayHeight = Math.max(manualDisplaySize.h, 80);
+  } else {
+    displayWidth = maxW;
+    displayHeight = Math.round(displayWidth / materialRatio);
+    if (displayHeight > maxH) {
+      displayHeight = maxH;
+      displayWidth = Math.round(displayHeight * materialRatio);
+    }
   }
 
   // Pixels-per-inch on screen for this canvas
@@ -391,11 +421,81 @@ export default function CanvasEditor() {
       ctx.restore();
     }
 
-    // Ruler overlay
-    if (showRuler) {
-      drawRuler(ctx, displayWidth, displayHeight, material.widthIn, material.heightIn, unit);
+  }, [partPhoto, design, displayWidth, displayHeight]);
+
+  const drawExternalRulers = useCallback(() => {
+    if (!showRuler) return;
+    const topCanvas = topRulerRef.current;
+    const leftCanvas = leftRulerRef.current;
+    if (!topCanvas || !leftCanvas) return;
+
+    const matW = unit === "in" ? material.widthIn : inToMm(material.widthIn);
+    const matH = unit === "in" ? material.heightIn : inToMm(material.heightIn);
+    const ppuX = displayWidth / matW;
+    const ppuY = displayHeight / matH;
+    const tickInterval = unit === "in" ? 0.5 : 10;
+    const subTick = unit === "in" ? 0.25 : 5;
+    const bg = "rgba(200,160,60,0.18)";
+    const tickColor = "rgba(200,160,60,0.7)";
+    const labelColor = "rgba(200,160,60,0.85)";
+    const lineColor = "rgba(200,160,60,0.35)";
+    const label = (value: number) => {
+      if (unit === "mm") return `${Math.round(value)}`;
+      return `${value.toFixed(2).replace(/\.?0+$/, "")}"`;
+    };
+    const isMajorTick = (value: number) =>
+      Math.abs(value / tickInterval - Math.round(value / tickInterval)) < 0.001;
+
+    topCanvas.width = displayWidth;
+    topCanvas.height = RULER_THICKNESS;
+    const topCtx = topCanvas.getContext("2d");
+    if (topCtx) {
+      topCtx.clearRect(0, 0, displayWidth, RULER_THICKNESS);
+      topCtx.fillStyle = bg;
+      topCtx.fillRect(0, 0, displayWidth, RULER_THICKNESS);
+      topCtx.fillStyle = lineColor;
+      topCtx.fillRect(0, RULER_THICKNESS - 1, displayWidth, 1);
+      topCtx.font = "8px monospace";
+      for (let v = 0; v <= matW + 0.001; v += subTick) {
+        const major = isMajorTick(v);
+        const px = Math.round(v * ppuX);
+        const tickH = major ? RULER_THICKNESS * 0.55 : RULER_THICKNESS * 0.3;
+        topCtx.fillStyle = tickColor;
+        topCtx.fillRect(px, RULER_THICKNESS - tickH, 1, tickH);
+        if (major && v > 0) {
+          topCtx.fillStyle = labelColor;
+          topCtx.fillText(label(v), px + 2, RULER_THICKNESS - tickH - 2);
+        }
+      }
     }
-  }, [partPhoto, design, displayWidth, displayHeight, showRuler, material, unit]);
+
+    leftCanvas.width = RULER_THICKNESS;
+    leftCanvas.height = displayHeight;
+    const leftCtx = leftCanvas.getContext("2d");
+    if (leftCtx) {
+      leftCtx.clearRect(0, 0, RULER_THICKNESS, displayHeight);
+      leftCtx.fillStyle = bg;
+      leftCtx.fillRect(0, 0, RULER_THICKNESS, displayHeight);
+      leftCtx.fillStyle = lineColor;
+      leftCtx.fillRect(RULER_THICKNESS - 1, 0, 1, displayHeight);
+      leftCtx.font = "8px monospace";
+      for (let v = 0; v <= matH + 0.001; v += subTick) {
+        const major = isMajorTick(v);
+        const py = Math.round(v * ppuY);
+        const tickW = major ? RULER_THICKNESS * 0.55 : RULER_THICKNESS * 0.3;
+        leftCtx.fillStyle = tickColor;
+        leftCtx.fillRect(RULER_THICKNESS - tickW, py, tickW, 1);
+        if (major && v > 0) {
+          leftCtx.save();
+          leftCtx.translate(RULER_THICKNESS - tickW - 2, py - 2);
+          leftCtx.rotate(-Math.PI / 2);
+          leftCtx.fillStyle = labelColor;
+          leftCtx.fillText(label(v), 0, 0);
+          leftCtx.restore();
+        }
+      }
+    }
+  }, [displayWidth, displayHeight, material, showRuler, unit]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -403,71 +503,13 @@ export default function CanvasEditor() {
     canvas.width = displayWidth;
     canvas.height = displayHeight;
     draw();
-  }, [displayWidth, displayHeight, draw]);
+    drawExternalRulers();
+  }, [displayWidth, displayHeight, draw, drawExternalRulers]);
 
   useEffect(() => {
     draw();
-  }, [draw]);
-
-  // --- Ruler drawing ---
-  function drawRuler(
-    ctx: CanvasRenderingContext2D,
-    w: number,
-    h: number,
-    matW: number,
-    matH: number,
-    u: UnitType
-  ) {
-    const rulerH = 18;
-    const rulerW = 14;
-    const ppiX = w / matW;
-    const ppiY = h / matH;
-
-    // Choose tick interval based on size
-    const tickInterval = u === "in" ? 0.5 : 10; // 0.5in or 10mm
-    const subTick = u === "in" ? 0.25 : 5;
-
-    ctx.save();
-    ctx.font = "9px monospace";
-    ctx.fillStyle = "rgba(200,160,60,0.75)";
-    ctx.fillRect(0, 0, w, rulerH);
-    ctx.fillRect(0, 0, rulerW, h);
-
-    // Horizontal ticks
-    const xDim = matW;
-    for (let v = 0; v <= xDim; v += subTick) {
-      const isMajor = Math.abs(v % tickInterval) < 0.001 || Math.abs(v % tickInterval - tickInterval) < 0.001;
-      const px = Math.round(v * ppiX);
-      const tickH = isMajor ? rulerH : rulerH * 0.5;
-      ctx.fillStyle = "rgba(10,12,20,0.9)";
-      ctx.fillRect(px, rulerH - tickH, 1, tickH);
-      if (isMajor && v > 0) {
-        ctx.fillStyle = "rgba(10,12,20,0.9)";
-        const label = u === "in" ? `${v}"` : `${v}`;
-        ctx.fillText(label, px + 2, rulerH - 4);
-      }
-    }
-
-    // Vertical ticks
-    const yDim = matH;
-    for (let v = 0; v <= yDim; v += subTick) {
-      const isMajor = Math.abs(v % tickInterval) < 0.001 || Math.abs(v % tickInterval - tickInterval) < 0.001;
-      const py = Math.round(v * ppiY);
-      const tW = isMajor ? rulerW : rulerW * 0.5;
-      ctx.fillStyle = "rgba(10,12,20,0.9)";
-      ctx.fillRect(rulerW - tW, py, tW, 1);
-      if (isMajor && v > 0) {
-        ctx.save();
-        ctx.translate(rulerW - 2, py - 2);
-        ctx.rotate(-Math.PI / 2);
-        ctx.fillStyle = "rgba(10,12,20,0.9)";
-        const label = u === "in" ? `${v}"` : `${v}`;
-        ctx.fillText(label, 0, 0);
-        ctx.restore();
-      }
-    }
-    ctx.restore();
-  }
+    drawExternalRulers();
+  }, [draw, drawExternalRulers]);
 
   // --- File loading ---
   const loadPartPhoto = useCallback((src: string) => {
@@ -828,6 +870,59 @@ export default function CanvasEditor() {
 
   const canExport = !!(partPhoto || design);
 
+  const handleResizeMouseDown = useCallback(
+    (e: React.MouseEvent, edge: ResizeDragState["edge"]) => {
+      e.stopPropagation();
+      e.preventDefault();
+      resizeDragRef.current = {
+        edge,
+        startX: e.clientX,
+        startY: e.clientY,
+        startW: displayWidth,
+        startH: displayHeight,
+      };
+
+      const handleMouseMove = (ev: MouseEvent) => {
+        const drag = resizeDragRef.current;
+        if (!drag) return;
+        const deltaX = ev.clientX - drag.startX;
+        const deltaY = ev.clientY - drag.startY;
+        let newW = drag.startW;
+        let newH = drag.startH;
+
+        if (drag.edge === "right") {
+          newW = drag.startW + deltaX;
+        } else if (drag.edge === "bottom") {
+          newH = drag.startH + deltaY;
+        } else {
+          newW = drag.startW + deltaX;
+          newH = drag.startH + deltaY;
+          if (ev.shiftKey) {
+            const aspect = drag.startW / drag.startH;
+            const avgDelta = (deltaX + deltaY) / 2;
+            newW = drag.startW + avgDelta;
+            newH = newW / aspect;
+          }
+        }
+
+        setManualDisplaySize({
+          w: Math.max(newW, 80),
+          h: Math.max(newH, 80),
+        });
+      };
+
+      const handleMouseUp = () => {
+        resizeDragRef.current = null;
+        window.removeEventListener("mousemove", handleMouseMove);
+        window.removeEventListener("mouseup", handleMouseUp);
+      };
+
+      window.addEventListener("mousemove", handleMouseMove);
+      window.addEventListener("mouseup", handleMouseUp);
+    },
+    [displayWidth, displayHeight]
+  );
+
   // --- Unit toggle ---
   const formatUnit = (valIn: number) => {
     if (unit === "in") return `${valIn.toFixed(2)}"`;
@@ -936,6 +1031,19 @@ export default function CanvasEditor() {
               </TooltipTrigger>
               <TooltipContent>Toggle ruler</TooltipContent>
             </Tooltip>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <Button
+                  size="sm"
+                  variant={resizeMode ? "secondary" : "ghost"}
+                  className="hidden sm:flex"
+                  onClick={() => setResizeMode(!resizeMode)}
+                >
+                  <GripHorizontal className="h-4 w-4" />
+                </Button>
+              </TooltipTrigger>
+              <TooltipContent>Toggle workspace resize</TooltipContent>
+            </Tooltip>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <Button size="sm" disabled={!canExport}>
@@ -964,46 +1072,94 @@ export default function CanvasEditor() {
           {/* Canvas — first on mobile */}
           <div ref={canvasContainerRef} className="flex flex-col items-center gap-3 order-1 lg:order-2">
             <div
-              className={`relative rounded-lg border-2 overflow-hidden transition-colors ${
-                isDropHover ? "border-primary" : "border-border"
-              }`}
-              style={{ width: displayWidth, height: displayHeight, maxWidth: "100%" }}
-              onDragOver={(e) => { e.preventDefault(); setIsDropHover(true); }}
-              onDragLeave={() => setIsDropHover(false)}
-              onDrop={handleDrop}
+              className="flex max-w-full flex-col"
+              style={{ width: displayWidth + (showRuler ? RULER_THICKNESS : 0) }}
             >
-              <canvas
-                ref={canvasRef}
-                width={displayWidth}
-                height={displayHeight}
-                className="block"
-                style={{ cursor: design ? (isDragging ? "grabbing" : "grab") : "default" }}
-                onMouseDown={handleMouseDown}
-                onMouseMove={handleMouseMove}
-                onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
-                onTouchStart={handleTouchStart}
-                onTouchMove={handleTouchMove}
-                onTouchEnd={handleTouchEnd}
-              />
+              {showRuler && (
+                <div className="flex">
+                  <div
+                    className="shrink-0 border-b border-r border-border/40 bg-secondary/30"
+                    style={{ width: RULER_THICKNESS, height: RULER_THICKNESS }}
+                  />
+                  <canvas
+                    ref={topRulerRef}
+                    width={displayWidth}
+                    height={RULER_THICKNESS}
+                    className="block"
+                    style={{ width: displayWidth, height: RULER_THICKNESS }}
+                  />
+                </div>
+              )}
+              <div className="flex">
+                {showRuler && (
+                  <canvas
+                    ref={leftRulerRef}
+                    width={RULER_THICKNESS}
+                    height={displayHeight}
+                    className="block shrink-0"
+                    style={{ width: RULER_THICKNESS, height: displayHeight }}
+                  />
+                )}
+                <div
+                  className={`relative rounded-lg border-2 overflow-hidden transition-colors ${
+                    isDropHover ? "border-primary" : "border-border"
+                  }`}
+                  style={{ width: displayWidth, height: displayHeight }}
+                  onDragOver={(e) => { e.preventDefault(); setIsDropHover(true); }}
+                  onDragLeave={() => setIsDropHover(false)}
+                  onDrop={handleDrop}
+                >
+                  <canvas
+                    ref={canvasRef}
+                    width={displayWidth}
+                    height={displayHeight}
+                    className="block"
+                    style={{ cursor: design ? (isDragging ? "grabbing" : "grab") : "default" }}
+                    onMouseDown={handleMouseDown}
+                    onMouseMove={handleMouseMove}
+                    onMouseUp={handleMouseUp}
+                    onMouseLeave={handleMouseUp}
+                    onTouchStart={handleTouchStart}
+                    onTouchMove={handleTouchMove}
+                    onTouchEnd={handleTouchEnd}
+                  />
 
-              {!partPhoto && !design && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground pointer-events-none">
-                  <ImageIcon className="h-10 w-10 mb-3 opacity-25" />
-                  <p className="text-sm font-medium text-center px-4">
-                    {isDropHover ? "Drop image here" : "Drop images here or use the sidebar"}
-                  </p>
-                  <p className="text-xs mt-1 opacity-50">Part photo → then your design</p>
+                  {!partPhoto && !design && (
+                    <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground pointer-events-none">
+                      <ImageIcon className="h-10 w-10 mb-3 opacity-25" />
+                      <p className="text-sm font-medium text-center px-4">
+                        {isDropHover ? "Drop image here" : "Drop images here or use the sidebar"}
+                      </p>
+                      <p className="text-xs mt-1 opacity-50">Part photo → then your design</p>
+                    </div>
+                  )}
+                  {partPhoto && !design && (
+                    <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
+                      <div className="bg-black/70 rounded-md px-3 py-2 text-center">
+                        <Layers className="h-4 w-4 mx-auto mb-1 text-primary opacity-70" />
+                        <p className="text-xs text-white font-medium whitespace-nowrap">Upload your design in Step 2</p>
+                      </div>
+                    </div>
+                  )}
+
+                  {resizeMode && (
+                    <>
+                      <div
+                        className="absolute top-0 right-0 z-10 h-full w-[6px] cursor-ew-resize bg-primary/30 transition-colors hover:bg-primary/60"
+                        onMouseDown={(e) => handleResizeMouseDown(e, "right")}
+                      />
+                      <div
+                        className="absolute bottom-0 left-0 z-10 h-[6px] w-full cursor-ns-resize bg-primary/30 transition-colors hover:bg-primary/60"
+                        onMouseDown={(e) => handleResizeMouseDown(e, "bottom")}
+                      />
+                      <div
+                        className="absolute bottom-0 right-0 z-10 h-[14px] w-[14px] cursor-nwse-resize bg-primary/30 transition-colors hover:bg-primary/60"
+                        onMouseDown={(e) => handleResizeMouseDown(e, "corner")}
+                      />
+                    </>
+                  )}
                 </div>
-              )}
-              {partPhoto && !design && (
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
-                  <div className="bg-black/70 rounded-md px-3 py-2 text-center">
-                    <Layers className="h-4 w-4 mx-auto mb-1 text-primary opacity-70" />
-                    <p className="text-xs text-white font-medium whitespace-nowrap">Upload your design in Step 2</p>
-                  </div>
-                </div>
-              )}
+              </div>
             </div>
 
             {/* Real-world size badge */}
