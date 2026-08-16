@@ -53,6 +53,7 @@ import {
   Undo2,
   Redo2,
   GripHorizontal,
+  ScanLine,
 } from "lucide-react";
 import {
   MATERIAL_PRESETS,
@@ -63,6 +64,7 @@ import {
   mmToIn,
 } from "./material-presets.ts";
 import { ENGRAVING_TEMPLATES, TEMPLATE_CATEGORIES } from "./templates.ts";
+import TraceVectorize from "./trace-vectorize.tsx";
 
 // --- Types ---
 
@@ -225,6 +227,8 @@ function TemplateThumbnail({ url, name }: { url: string; name: string }) {
 export default function CanvasEditor() {
   const [partPhoto, setPartPhoto] = useState<HTMLImageElement | null>(null);
   const [design, setDesign] = useState<ImageState | null>(null);
+  const [designSrc, setDesignSrc] = useState<string | null>(null);
+  const [traceOpen, setTraceOpen] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [isDropHover, setIsDropHover] = useState(false);
@@ -546,6 +550,8 @@ export default function CanvasEditor() {
             flipV: false,
             filters: { ...DEFAULT_FILTERS },
           });
+          setDesignSrc(src);
+          setTraceOpen(false);
           const widthIn = displayToInches(natW * initScale, displayWidth, material.widthIn);
           const heightIn = displayToInches(natH * initScale, displayHeight, material.heightIn);
           if (unit === "in") {
@@ -1304,7 +1310,12 @@ export default function CanvasEditor() {
                 <Button
                   variant="ghost" size="sm"
                   className="w-full text-destructive hover:text-destructive"
-                  onClick={() => { setDesign(null); if (designInputRef.current) designInputRef.current.value = ""; }}
+                  onClick={() => {
+                    setDesign(null);
+                    setDesignSrc(null);
+                    setTraceOpen(false);
+                    if (designInputRef.current) designInputRef.current.value = "";
+                  }}
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5" /> Remove Design
                 </Button>
@@ -1627,6 +1638,32 @@ export default function CanvasEditor() {
                     <li className="flex items-center gap-2"><kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono">Arrows</kbd> Nudge 2px</li>
                   </ul>
                 </div>
+              </div>
+            )}
+
+            {design && designSrc && (
+              <div className="rounded-lg border border-border bg-card overflow-hidden">
+                <button
+                  className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-secondary/50 transition-colors cursor-pointer"
+                  onClick={() => setTraceOpen((v) => !v)}
+                >
+                  <div className="flex items-center gap-2 min-w-0">
+                    <ScanLine className="h-4 w-4 text-primary shrink-0" />
+                    <span className="text-xs uppercase tracking-wider text-muted-foreground font-medium">Trace & Vectorize</span>
+                  </div>
+                  <ChevronDown className={`h-4 w-4 text-muted-foreground transition-transform duration-200 ${traceOpen ? "rotate-180" : ""}`} />
+                </button>
+                {traceOpen && (
+                  <div className="border-t border-border p-4">
+                    <TraceVectorize
+                      designSrc={designSrc}
+                      displayWidth={displayWidth}
+                      displayHeight={displayHeight}
+                      onApply={(dataUrl) => loadDesign(dataUrl)}
+                      onApplySvg={(svgDataUrl) => loadDesign(svgDataUrl)}
+                    />
+                  </div>
+                )}
               </div>
             )}
           </div>
