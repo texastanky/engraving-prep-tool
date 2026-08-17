@@ -132,6 +132,7 @@ const DEFAULT_FILTERS: ImageFilters = {
 
 const SCREEN_DPI = 96;
 const STORAGE_KEY = "pgs-canvas-editor-v1";
+const HISTORY_LIMIT = 80;
 
 // Serializable subset of ImageState (no HTMLImageElement)
 type SavedDesignState = Omit<ImageState, "element">;
@@ -163,6 +164,54 @@ function inchesToDisplay(inches: number, displayPixels: number, materialInches: 
 
 function displayToInches(pixels: number, displayPixels: number, materialInches: number): number {
   return (pixels / displayPixels) * materialInches;
+}
+
+function cloneWarpMesh(mesh: WarpMesh | null): WarpMesh | null {
+  if (!mesh) return null;
+  return {
+    tl: { ...mesh.tl },
+    tr: { ...mesh.tr },
+    bl: { ...mesh.bl },
+    br: { ...mesh.br },
+    top: mesh.top.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
+    bottom: mesh.bottom.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
+    left: mesh.left.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
+    right: mesh.right.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
+  };
+}
+
+function cloneImageState(state: ImageState): ImageState {
+  return {
+    ...state,
+    filters: { ...state.filters },
+    warpMesh: cloneWarpMesh(state.warpMesh),
+  };
+}
+
+function roundHistoryNumber(value: number): number {
+  return Math.round(value * 1000) / 1000;
+}
+
+function imageStateSignature(state: ImageState): string {
+  const imageSrc = state.element.currentSrc || state.element.src || "";
+  const sourceKey = `${imageSrc.length}:${imageSrc.slice(0, 128)}:${imageSrc.slice(-128)}`;
+
+  return JSON.stringify({
+    sourceKey,
+    x: roundHistoryNumber(state.x),
+    y: roundHistoryNumber(state.y),
+    scale: roundHistoryNumber(state.scale),
+    scaleX: roundHistoryNumber(state.scaleX),
+    scaleY: roundHistoryNumber(state.scaleY),
+    rotation: roundHistoryNumber(state.rotation),
+    opacity: roundHistoryNumber(state.opacity),
+    naturalWidth: state.naturalWidth,
+    naturalHeight: state.naturalHeight,
+    flipH: state.flipH,
+    flipV: state.flipV,
+    filters: state.filters,
+    warpMesh: state.warpMesh,
+  });
 }
 
 function applyFiltersToCanvas(
@@ -383,6 +432,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [designSrc, setDesignSrc] = useState<string | null>(null);
   const [partRotation, setPartRotation] = useState(0); // degrees
   const [design, setDesign] = useState<ImageState | null>(null);
+  const latestDesignRef = useRef<ImageState | null>(null);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [isDropHover, setIsDropHover] = useState(false);
@@ -403,13 +453,24 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const historyRef = useRef<ImageState[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const skipHistoryRef = useRef(false);
+  const continuousEditRef = useRef(false);
+  const lastHistorySignatureRef = useRef<string | null>(null);
 
   const pushHistory = useCallback((state: ImageState) => {
     if (skipHistoryRef.current) return;
+    const snapshot = cloneImageState(state);
+    const signature = imageStateSignature(snapshot);
+    if (signature === lastHistorySignatureRef.current) return;
+
     // Drop any future states if we're mid-history
-    historyRef.current = historyRef.current.slice(0, historyIndexRef.current + 1);
-    historyRef.current.push(state);
+    let nextHistory = historyRef.current.slice(0, historyIndexRef.current + 1);
+    nextHistory.push(snapshot);
+    if (nextHistory.length > HISTORY_LIMIT) {
+      nextHistory = nextHistory.slice(nextHistory.length - HISTORY_LIMIT);
+    }
+    historyRef.current = nextHistory;
     historyIndexRef.current = historyRef.current.length - 1;
+    lastHistorySignatureRef.current = signature;
   }, []);
 
   const [canUndo, setCanUndo] = useState(false);
@@ -424,7 +485,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     if (historyIndexRef.current <= 0) return;
     historyIndexRef.current -= 1;
     skipHistoryRef.current = true;
-    setDesign(historyRef.current[historyIndexRef.current]);
+    continuousEditRef.current = false;
+    const snapshot = cloneImageState(historyRef.current[historyIndexRef.current]);
+    latestDesignRef.current = snapshot;
+    lastHistorySignatureRef.current = imageStateSignature(snapshot);
+    setDesign(snapshot);
     updateUndoRedoState();
   }, [updateUndoRedoState]);
 
@@ -432,9 +497,46 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     if (historyIndexRef.current >= historyRef.current.length - 1) return;
     historyIndexRef.current += 1;
     skipHistoryRef.current = true;
-    setDesign(historyRef.current[historyIndexRef.current]);
+    continuousEditRef.current = false;
+    const snapshot = cloneImageState(historyRef.current[historyIndexRef.current]);
+    latestDesignRef.current = snapshot;
+    lastHistorySignatureRef.current = imageStateSignature(snapshot);
+    setDesign(snapshot);
     updateUndoRedoState();
   }, [updateUndoRedoState]);
+
+  const updateDesignContinuously = useCallback((updater: (state: ImageState) => ImageState) => {
+    const current = latestDesignRef.current;
+    if (!current) return;
+    const next = updater(current);
+    continuousEditRef.current = true;
+    latestDesignRef.current = next;
+    setDesign(next);
+  }, []);
+
+  const commitDesignChange = useCallback((next: ImageState) => {
+    continuousEditRef.current = false;
+    const snapshot = cloneImageState(next);
+    latestDesignRef.current = snapshot;
+    setDesign(snapshot);
+    pushHistory(snapshot);
+    updateUndoRedoState();
+  }, [pushHistory, updateUndoRedoState]);
+
+  const commitDesignUpdate = useCallback((updater: (state: ImageState) => ImageState) => {
+    const current = latestDesignRef.current;
+    if (!current) return;
+    commitDesignChange(updater(current));
+  }, [commitDesignChange]);
+
+  const commitCurrentDesign = useCallback(() => {
+    const current = latestDesignRef.current;
+    if (!current) {
+      continuousEditRef.current = false;
+      return;
+    }
+    commitDesignChange(current);
+  }, [commitDesignChange]);
 
   const canvasContainerRef = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -497,17 +599,25 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  useEffect(() => {
+    latestDesignRef.current = design;
+  }, [design]);
+
   // Track design changes into history
   useEffect(() => {
     if (!design) return;
     if (skipHistoryRef.current) {
       // This change came from undo/redo — clear the flag and don't push
       skipHistoryRef.current = false;
+      updateUndoRedoState();
+      return;
+    }
+    if (isDragging || continuousEditRef.current) {
       return;
     }
     pushHistory(design);
     updateUndoRedoState();
-  }, [design, pushHistory, updateUndoRedoState]);
+  }, [design, isDragging, pushHistory, updateUndoRedoState]);
 
   // Responsive sizing
   useEffect(() => {
@@ -897,12 +1007,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [design, displayWidth, displayHeight, material, unit]);
 
   // --- Drag to reposition ---
-  const getPos = (clientX: number, clientY: number) => {
+  const getPos = useCallback((clientX: number, clientY: number): Pt => {
     const canvas = canvasRef.current;
     if (!canvas) return { x: clientX, y: clientY };
     const rect = canvas.getBoundingClientRect();
     return { x: clientX - rect.left, y: clientY - rect.top };
-  };
+  }, []);
 
   const getEraserPosInDesign = useCallback((canvasX: number, canvasY: number): { x: number; y: number } | null => {
     if (!design) return null;
@@ -963,7 +1073,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       setIsDragging(true);
       setDragStart({ x: pos.x - design.x, y: pos.y - design.y });
     },
-    [design, eraserActive, getEraserPosInDesign, applyEraserStroke, draw]
+    [design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw]
   );
 
   const handleMouseMove = useCallback(
@@ -978,15 +1088,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         return;
       }
       if (!isDragging) return;
-      setDesign({ ...design, x: pos.x - dragStart.x, y: pos.y - dragStart.y });
+      updateDesignContinuously((current) => ({ ...current, x: pos.x - dragStart.x, y: pos.y - dragStart.y }));
     },
-    [isDragging, design, dragStart, eraserActive, getEraserPosInDesign, applyEraserStroke, draw]
+    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously]
   );
 
   const handleMouseUp = useCallback(() => {
+    if (isDragging) commitCurrentDesign();
     isErasingRef.current = false;
     setIsDragging(false);
-  }, []);
+  }, [isDragging, commitCurrentDesign]);
 
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
@@ -1002,7 +1113,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       setIsDragging(true);
       setDragStart({ x: pos.x - design.x, y: pos.y - design.y });
     },
-    [design, eraserActive, getEraserPosInDesign, applyEraserStroke, draw]
+    [design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw]
   );
 
   const handleTouchMove = useCallback(
@@ -1019,15 +1130,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         return;
       }
       if (!isDragging) return;
-      setDesign({ ...design, x: pos.x - dragStart.x, y: pos.y - dragStart.y });
+      updateDesignContinuously((current) => ({ ...current, x: pos.x - dragStart.x, y: pos.y - dragStart.y }));
     },
-    [isDragging, design, dragStart, eraserActive, getEraserPosInDesign, applyEraserStroke, draw]
+    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously]
   );
 
   const handleTouchEnd = useCallback(() => {
+    if (isDragging) commitCurrentDesign();
     isErasingRef.current = false;
     setIsDragging(false);
-  }, []);
+  }, [isDragging, commitCurrentDesign]);
 
   // Keyboard shortcuts
   useEffect(() => {
@@ -1051,7 +1163,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [design]);
+  }, [design, handleUndo, handleRedo]);
 
   // Quick actions
   const handleFill = useCallback(() => {
@@ -1355,8 +1467,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           }
         }
 
-        setDesign((prev) => {
-          if (!prev) return prev;
+        updateDesignContinuously((prev) => {
           return {
             ...prev,
             scaleX: newImgW / prev.naturalWidth,
@@ -1369,6 +1480,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       };
 
       const onUp = () => {
+        commitCurrentDesign();
         designResizeDragRef.current = null;
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
@@ -1377,7 +1489,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [design]
+    [design, updateDesignContinuously, commitCurrentDesign]
   );
 
   // --- Warp mode helpers ---
@@ -1411,16 +1523,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       e.stopPropagation(); e.preventDefault();
       const onMove = (ev: MouseEvent) => {
         const pos = getPos(ev.clientX, ev.clientY);
-        setDesign(prev => {
-          if (!prev?.warpMesh) return prev;
+        updateDesignContinuously((prev) => {
+          if (!prev.warpMesh) return prev;
           return { ...prev, warpMesh: { ...prev.warpMesh, [corner]: pos } };
         });
       };
-      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      const onUp = () => { commitCurrentDesign(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [design]
+    [design, getPos, updateDesignContinuously, commitCurrentDesign]
   );
 
   // Drag an existing edge pin
@@ -1441,8 +1553,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       if (!pin) return;
       const onMove = (ev: MouseEvent) => {
         const pos = getPos(ev.clientX, ev.clientY);
-        setDesign(prev => {
-          if (!prev?.warpMesh) return prev;
+        updateDesignContinuously((prev) => {
+          if (!prev.warpMesh) return prev;
           const m = prev.warpMesh;
           // Recompute offset from straight-line position
           const a = m[cA]; const b = m[cB];
@@ -1452,11 +1564,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           return { ...prev, warpMesh: { ...m, [edge]: newPins } };
         });
       };
-      const onUp = () => { window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
+      const onUp = () => { commitCurrentDesign(); window.removeEventListener("mousemove", onMove); window.removeEventListener("mouseup", onUp); };
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [design]
+    [design, getPos, updateDesignContinuously, commitCurrentDesign]
   );
 
   // Add a pin by clicking on the edge outline in warp mode
@@ -1481,7 +1593,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const newPins = [...mesh[edge], newPin].sort((p1, p2) => p1.t - p2.t);
       setDesign({ ...design, warpMesh: { ...mesh, [edge]: newPins } });
     },
-    [design]
+    [design, getPos]
   );
 
   // Remove a pin by right-clicking it
@@ -1529,10 +1641,25 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
   }, [material, unit]);
 
-  const updateFilter = (key: keyof ImageFilters, value: number) => {
-    if (!design) return;
-    setDesign({ ...design, filters: { ...design.filters, [key]: value } });
-  };
+  const updateFilter = useCallback(
+    (key: keyof ImageFilters, value: number) => {
+      updateDesignContinuously((current) => ({
+        ...current,
+        filters: { ...current.filters, [key]: value },
+      }));
+    },
+    [updateDesignContinuously]
+  );
+
+  const commitFilter = useCallback(
+    (key: keyof ImageFilters, value: number) => {
+      commitDesignUpdate((current) => ({
+        ...current,
+        filters: { ...current.filters, [key]: value },
+      }));
+    },
+    [commitDesignUpdate]
+  );
 
   const resetFilters = () => {
     if (!design) return;
@@ -2288,7 +2415,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         min={1}
                         max={500}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, scale: v / 100 })}
+                        onValueChange={([v]) => updateDesignContinuously((current) => ({ ...current, scale: v / 100 }))}
+                        onValueCommit={([v]) => commitDesignUpdate((current) => ({ ...current, scale: v / 100 }))}
                       />
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" className="flex-1 h-7 text-xs" onClick={() => setDesign({ ...design, scale: Math.max(design.scale * 0.9, 0.01) })}><ZoomOut className="h-3 w-3" /></Button>
@@ -2309,7 +2437,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         min={0}
                         max={360}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, rotation: v })}
+                        onValueChange={([v]) => updateDesignContinuously((current) => ({ ...current, rotation: v }))}
+                        onValueCommit={([v]) => commitDesignUpdate((current) => ({ ...current, rotation: v }))}
                       />
                       <div className="flex gap-1">
                         <Button variant="ghost" size="sm" className="flex-1 h-7 text-xs" onClick={() => setDesign({ ...design, rotation: (design.rotation + 90) % 360 })}>+90°</Button>
@@ -2475,7 +2604,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         min={10}
                         max={100}
                         step={1}
-                        onValueChange={([v]) => setDesign({ ...design, opacity: v / 100 })}
+                        onValueChange={([v]) => updateDesignContinuously((current) => ({ ...current, opacity: v / 100 }))}
+                        onValueCommit={([v]) => commitDesignUpdate((current) => ({ ...current, opacity: v / 100 }))}
                       />
                     </div>
 
@@ -2528,6 +2658,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         value={[design.filters.grayscale]}
                         min={0} max={100} step={1}
                         onValueChange={([v]) => updateFilter("grayscale", v)}
+                        onValueCommit={([v]) => commitFilter("grayscale", v)}
                       />
                     </div>
 
@@ -2543,6 +2674,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         value={[design.filters.brightness]}
                         min={0} max={200} step={1}
                         onValueChange={([v]) => updateFilter("brightness", v)}
+                        onValueCommit={([v]) => commitFilter("brightness", v)}
                       />
                     </div>
 
@@ -2558,6 +2690,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         value={[design.filters.contrast]}
                         min={0} max={200} step={1}
                         onValueChange={([v]) => updateFilter("contrast", v)}
+                        onValueCommit={([v]) => commitFilter("contrast", v)}
                       />
                     </div>
 
@@ -2571,6 +2704,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         value={[design.filters.invert]}
                         min={0} max={100} step={1}
                         onValueChange={([v]) => updateFilter("invert", v)}
+                        onValueCommit={([v]) => commitFilter("invert", v)}
                       />
                     </div>
 
