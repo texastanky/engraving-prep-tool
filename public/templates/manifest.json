@@ -13,6 +13,12 @@
       "bytes": 24251897
     },
     {
+      "id": "p365-x-reticle-red-911",
+      "source": "local:fabricator_8k.png",
+      "local": "/templates/p365-x-reticle-red-911.png",
+      "bytes": 4716670
+    },
+    {
       "id": "sw-full",
       "source": "https://hercules-cdn.com/file_d3cFFdxgJwXa59G0W692X8wk",
       "local": "/templates/sw-full.svg",

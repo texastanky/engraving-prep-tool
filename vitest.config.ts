@@ -1,11 +1,12 @@
 import react from "@vitejs/plugin-react-swc";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
 // Unit-test config for the portable React app.
 export default defineConfig({
   resolve: {
     alias: {
-      "@": new URL("./src", import.meta.url).pathname,
+      "@": fileURLToPath(new URL("./src", import.meta.url)),
     },
   },
   test: {

@@ -65,8 +65,11 @@ import {
   mmToIn,
 } from "./material-presets.ts";
 import { ENGRAVING_TEMPLATES, TEMPLATE_CATEGORIES } from "./templates.ts";
+import AiComposePanel from "./ai-compose-panel.tsx";
+import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
-import { ScanLine, Crop, Wand2, Eraser, Frame } from "lucide-react";
+import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
+import { ScanLine, Crop, Wand2, Eraser, Frame, PenTool } from "lucide-react";
 import { toast } from "sonner";
 import CropModal from "./crop-modal.tsx";
 import { removeBackground, roundCorners } from "./image-utils.ts";
@@ -78,6 +81,12 @@ import {
   type EngravingCopyValues,
   type EngravingLocale,
 } from "./engraving-copy.ts";
+import {
+  EXPORT_DPI,
+  createActualSizeSvg,
+  setJpegDpi,
+  setPngDpi,
+} from "./export-calibration.ts";
 
 // --- Types ---
 
@@ -89,6 +98,112 @@ type ImageFilters = {
 };
 
 type Pt = { x: number; y: number };
+
+function formatPathNumber(value: number): string {
+  return Number(value.toFixed(3)).toString();
+}
+
+function clampPointToCanvas(point: Pt, width: number, height: number): Pt {
+  return {
+    x: Math.max(0, Math.min(width, point.x)),
+    y: Math.max(0, Math.min(height, point.y)),
+  };
+}
+
+function buildTracePath(points: Pt[], closed: boolean): string {
+  if (!points.length) return "";
+  const [first, ...rest] = points;
+  const segments = [
+    `M ${formatPathNumber(first.x)} ${formatPathNumber(first.y)}`,
+    ...rest.map((point) => `L ${formatPathNumber(point.x)} ${formatPathNumber(point.y)}`),
+  ];
+  if (closed && points.length > 2) segments.push("Z");
+  return segments.join(" ");
+}
+
+function createPenTraceSvg({
+  points,
+  closed,
+  width,
+  height,
+  strokeWidth = 2,
+}: {
+  points: Pt[];
+  closed: boolean;
+  width: number;
+  height: number;
+  strokeWidth?: number;
+}): string {
+  const path = buildTracePath(points, closed);
+  const w = formatPathNumber(width);
+  const h = formatPathNumber(height);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
+  <path d="${path}" fill="none" stroke="#000000" stroke-width="${formatPathNumber(strokeWidth)}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+</svg>`;
+}
+
+function createActualSizePenTraceSvg({
+  points,
+  closed,
+  displayWidth,
+  displayHeight,
+  widthIn,
+  heightIn,
+}: {
+  points: Pt[];
+  closed: boolean;
+  displayWidth: number;
+  displayHeight: number;
+  widthIn: number;
+  heightIn: number;
+}): string {
+  const widthMm = inToMm(widthIn);
+  const heightMm = inToMm(heightIn);
+  const scaledPoints = points.map((point) => ({
+    x: (point.x / displayWidth) * widthMm,
+    y: (point.y / displayHeight) * heightMm,
+  }));
+  const path = buildTracePath(scaledPoints, closed);
+  const w = formatPathNumber(widthMm);
+  const h = formatPathNumber(heightMm);
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}">
+  <title>Manual pen trace ${widthIn.toFixed(3)}in x ${heightIn.toFixed(3)}in</title>
+  <path d="${path}" fill="none" stroke="#000000" stroke-width="0.2" stroke-linecap="round" stroke-linejoin="round" />
+</svg>`;
+}
+
+function svgToDataUrl(svg: string): string {
+  return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+function drawTraceOnCanvas(
+  ctx: CanvasRenderingContext2D,
+  points: Pt[],
+  closed: boolean,
+  options: {
+    scaleX?: number;
+    scaleY?: number;
+    strokeStyle?: string;
+    lineWidth?: number;
+  } = {}
+) {
+  if (points.length < 2) return;
+  const scaleX = options.scaleX ?? 1;
+  const scaleY = options.scaleY ?? 1;
+  ctx.save();
+  ctx.strokeStyle = options.strokeStyle ?? "#000000";
+  ctx.lineWidth = options.lineWidth ?? 2;
+  ctx.lineCap = "round";
+  ctx.lineJoin = "round";
+  ctx.beginPath();
+  ctx.moveTo(points[0].x * scaleX, points[0].y * scaleY);
+  for (const point of points.slice(1)) {
+    ctx.lineTo(point.x * scaleX, point.y * scaleY);
+  }
+  if (closed && points.length > 2) ctx.closePath();
+  ctx.stroke();
+  ctx.restore();
+}
 
 // A pin on an edge, t=0..1 is position along that edge between its two corners
 type EdgePin = { id: string; t: number; offset: Pt }; // offset = how far this pin has been dragged from its natural position on the straight edge
@@ -133,6 +248,9 @@ const DEFAULT_FILTERS: ImageFilters = {
 const SCREEN_DPI = 96;
 const STORAGE_KEY = "pgs-canvas-editor-v1";
 const HISTORY_LIMIT = 80;
+const RULER_THICKNESS = 20;
+const MIN_CANVAS_SIZE = 80;
+const CANVAS_MARGIN = 8;
 
 // Serializable subset of ImageState (no HTMLImageElement)
 type SavedDesignState = Omit<ImageState, "element">;
@@ -339,20 +457,23 @@ function TemplateThumbnail({ url, name }: { url: string; name: string }) {
   const [failed, setFailed] = React.useState(false);
 
   React.useEffect(() => {
-    let revoked = false;
+    let cancelled = false;
+    let nextObjectUrl: string | null = null;
     fetch(url)
       .then((r) => r.blob())
       .then((blob) => {
-        const typed = new Blob([blob], { type: "image/svg+xml" });
-        const ou = URL.createObjectURL(typed);
-        if (!revoked) setObjectUrl(ou);
+        nextObjectUrl = URL.createObjectURL(blob);
+        if (cancelled) {
+          URL.revokeObjectURL(nextObjectUrl);
+          return;
+        }
+        setObjectUrl(nextObjectUrl);
       })
-      .catch(() => { if (!revoked) setFailed(true); });
+      .catch(() => { if (!cancelled) setFailed(true); });
     return () => {
-      revoked = true;
-      if (objectUrl) URL.revokeObjectURL(objectUrl);
+      cancelled = true;
+      if (nextObjectUrl) URL.revokeObjectURL(nextObjectUrl);
     };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [url]);
 
   return (
@@ -425,6 +546,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [eraserSize, setEraserSize] = useState(30); // brush radius in display pixels
   const eraserMaskRef = useRef<HTMLCanvasElement | null>(null);
   const [warpMode, setWarpMode] = useState(false);
+  const [penTraceActive, setPenTraceActive] = useState(false);
+  const [penTracePoints, setPenTracePoints] = useState<Pt[]>([]);
+  const [penTraceClosed, setPenTraceClosed] = useState(false);
+  const [penTraceHover, setPenTraceHover] = useState<Pt | null>(null);
+  const penTraceDragPointRef = useRef<number | null>(null);
   const isErasingRef = useRef(false);
   const [partPhoto, setPartPhoto] = useState<HTMLImageElement | null>(null);
   // Images are NOT restored from localStorage — start fresh each session
@@ -436,7 +562,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [isDragging, setIsDragging] = useState(false);
   const [dragStart, setDragStart] = useState({ x: 0, y: 0 });
   const [isDropHover, setIsDropHover] = useState(false);
-  const [containerWidth, setContainerWidth] = useState(800);
+  const [containerWidth, setContainerWidth] = useState(() => {
+    if (typeof window === "undefined") return 800;
+    return Math.max(
+      MIN_CANVAS_SIZE + RULER_THICKNESS,
+      Math.min(window.innerWidth - 32, 800),
+    );
+  });
   const [unit, setUnit] = useState<UnitType>(_saved.unit ?? "in");
   const [material, setMaterial] = useState<MaterialSize>(_saved.material ?? { widthIn: 4.0, heightIn: 4.0 });
   const [selectedPresetId, setSelectedPresetId] = useState<string>(_saved.selectedPresetId ?? "custom");
@@ -633,16 +765,38 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, []);
 
   // Canvas display size — driven by material aspect ratio (or manual override)
-  const maxW = Math.min(containerWidth - 8, 820);
-  const maxH = Math.min(window.innerHeight * 0.58, 520);
+  const rulerThickness = showRuler ? RULER_THICKNESS : 0;
+  const availableWorkspaceWidth = Math.max(
+    containerWidth - CANVAS_MARGIN,
+    MIN_CANVAS_SIZE + rulerThickness,
+  );
+  const maxW = Math.min(
+    Math.max(availableWorkspaceWidth - rulerThickness, MIN_CANVAS_SIZE),
+    820,
+  );
+  const viewportHeight = typeof window === "undefined" ? 900 : window.innerHeight;
+  const isCompactLayout = containerWidth < 640;
+  const maxH = Math.min(
+    viewportHeight * (isCompactLayout ? 0.44 : 0.58),
+    isCompactLayout ? 420 : 520,
+  );
   const materialRatio = material.widthIn / material.heightIn;
 
   let displayWidth: number;
   let displayHeight: number;
 
   if (resizeMode && manualDisplaySize) {
-    displayWidth = Math.max(manualDisplaySize.w, 80);
-    displayHeight = Math.max(manualDisplaySize.h, 80);
+    const manualRatio =
+      manualDisplaySize.h > 0 ? manualDisplaySize.w / manualDisplaySize.h : materialRatio;
+    displayWidth = Math.min(Math.max(manualDisplaySize.w, MIN_CANVAS_SIZE), maxW);
+    displayHeight = Math.min(Math.max(manualDisplaySize.h, MIN_CANVAS_SIZE), maxH);
+    if (manualDisplaySize.w > maxW) {
+      displayHeight = Math.round(displayWidth / manualRatio);
+    }
+    if (displayHeight > maxH) {
+      displayHeight = maxH;
+      displayWidth = Math.min(maxW, Math.round(displayHeight * manualRatio));
+    }
   } else {
     displayWidth = maxW;
     displayHeight = Math.round(displayWidth / materialRatio);
@@ -744,8 +898,6 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [draw]);
 
   // --- External ruler drawing (drawn on dedicated canvases outside the workspace) ---
-  const RULER_THICKNESS = 20;
-
   const drawExternalRulers = useCallback(() => {
     const topCanvas = topRulerRef.current;
     const leftCanvas = leftRulerRef.current;
@@ -892,12 +1044,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         // Local file (drag & drop or file picker) — load directly
         applyImg(src);
       } else {
-        // Remote URL (template CDN) — all templates are SVGs
+        // Remote URL (template CDN or bundled asset) — preserve the file's real image type.
         fetch(src)
           .then((r) => r.blob())
           .then((blob) => {
-            const typed = new Blob([blob], { type: "image/svg+xml" });
-            const objectUrl = URL.createObjectURL(typed);
+            const objectUrl = URL.createObjectURL(blob);
             applyImg(objectUrl);
           })
           .catch(() => {});
@@ -1014,6 +1165,43 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     return { x: clientX - rect.left, y: clientY - rect.top };
   }, []);
 
+  const addPenTracePoint = useCallback(
+    (point: Pt) => {
+      if (penTraceClosed) return;
+      setPenTracePoints((current) => [
+        ...current,
+        clampPointToCanvas(point, displayWidth, displayHeight),
+      ]);
+    },
+    [displayWidth, displayHeight, penTraceClosed]
+  );
+
+  const handlePenTracePointMouseDown = useCallback(
+    (e: React.MouseEvent, pointIndex: number) => {
+      if (!penTraceActive) return;
+      e.stopPropagation();
+      e.preventDefault();
+      penTraceDragPointRef.current = pointIndex;
+
+      const onMove = (ev: MouseEvent) => {
+        const point = clampPointToCanvas(getPos(ev.clientX, ev.clientY), displayWidth, displayHeight);
+        setPenTracePoints((current) =>
+          current.map((existing, index) => (index === pointIndex ? point : existing))
+        );
+      };
+
+      const onUp = () => {
+        penTraceDragPointRef.current = null;
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [displayWidth, displayHeight, getPos, penTraceActive]
+  );
+
   const getEraserPosInDesign = useCallback((canvasX: number, canvasY: number): { x: number; y: number } | null => {
     if (!design) return null;
     const imgW = design.naturalWidth * design.scale * design.scaleX;
@@ -1061,6 +1249,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      if (penTraceActive) {
+        e.preventDefault();
+        addPenTracePoint(getPos(e.clientX, e.clientY));
+        return;
+      }
       if (!design) return;
       e.preventDefault();
       const pos = getPos(e.clientX, e.clientY);
@@ -1073,11 +1266,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       setIsDragging(true);
       setDragStart({ x: pos.x - design.x, y: pos.y - design.y });
     },
-    [design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw]
+    [addPenTracePoint, design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, penTraceActive]
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      if (penTraceActive) {
+        setPenTraceHover(clampPointToCanvas(getPos(e.clientX, e.clientY), displayWidth, displayHeight));
+        return;
+      }
       if (!design) return;
       const pos = getPos(e.clientX, e.clientY);
       if (eraserActive) {
@@ -1090,7 +1287,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       if (!isDragging) return;
       updateDesignContinuously((current) => ({ ...current, x: pos.x - dragStart.x, y: pos.y - dragStart.y }));
     },
-    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously]
+    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously, penTraceActive, displayWidth, displayHeight]
   );
 
   const handleMouseUp = useCallback(() => {
@@ -1101,6 +1298,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
+      if (penTraceActive && e.touches.length === 1) {
+        e.preventDefault();
+        const touch = e.touches[0];
+        addPenTracePoint(getPos(touch.clientX, touch.clientY));
+        return;
+      }
       if (!design || e.touches.length !== 1) return;
       const touch = e.touches[0];
       const pos = getPos(touch.clientX, touch.clientY);
@@ -1113,11 +1316,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       setIsDragging(true);
       setDragStart({ x: pos.x - design.x, y: pos.y - design.y });
     },
-    [design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw]
+    [addPenTracePoint, design, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, penTraceActive]
   );
 
   const handleTouchMove = useCallback(
     (e: React.TouchEvent) => {
+      if (penTraceActive) {
+        e.preventDefault();
+        return;
+      }
       if (!design || e.touches.length !== 1) return;
       e.preventDefault();
       const touch = e.touches[0];
@@ -1132,7 +1339,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       if (!isDragging) return;
       updateDesignContinuously((current) => ({ ...current, x: pos.x - dragStart.x, y: pos.y - dragStart.y }));
     },
-    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously]
+    [isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign, applyEraserStroke, draw, updateDesignContinuously, penTraceActive]
   );
 
   const handleTouchEnd = useCallback(() => {
@@ -1144,9 +1351,34 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // Keyboard shortcuts
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (!design) return;
       const tag = (e.target as HTMLElement).tagName;
       if (tag === "INPUT" || tag === "TEXTAREA") return;
+      if (penTraceActive) {
+        if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z" && penTracePoints.length > 0) {
+          e.preventDefault();
+          setPenTracePoints((current) => current.slice(0, -1));
+          setPenTraceClosed(false);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setPenTraceActive(false);
+          setPenTraceHover(null);
+          return;
+        }
+        if (e.key === "Enter" && penTracePoints.length >= 3) {
+          e.preventDefault();
+          setPenTraceClosed(true);
+          return;
+        }
+        if ((e.key === "Backspace" || e.key === "Delete") && penTracePoints.length > 0) {
+          e.preventDefault();
+          setPenTracePoints((current) => current.slice(0, -1));
+          setPenTraceClosed(false);
+          return;
+        }
+      }
+      if (!design) return;
       if ((e.ctrlKey || e.metaKey) && e.key === "z") { e.preventDefault(); handleUndo(); return; }
       if ((e.ctrlKey || e.metaKey) && (e.key === "y" || (e.shiftKey && e.key === "z"))) { e.preventDefault(); handleRedo(); return; }
       if (!design) return;
@@ -1163,7 +1395,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [design, handleUndo, handleRedo]);
+  }, [design, handleUndo, handleRedo, penTraceActive, penTracePoints.length]);
 
   // Quick actions
   const handleFill = useCallback(() => {
@@ -1198,9 +1430,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const getExportCanvas = useCallback((): HTMLCanvasElement | null => {
     if (!partPhoto && !design) return null;
     // Export at laser-friendly 300 DPI based on material size
-    const exportDpi = 300;
-    const expW = Math.round(material.widthIn * exportDpi);
-    const expH = Math.round(material.heightIn * exportDpi);
+    const expW = Math.round(material.widthIn * EXPORT_DPI);
+    const expH = Math.round(material.heightIn * EXPORT_DPI);
     const scaleX = expW / displayWidth;
     const scaleY = expH / displayHeight;
 
@@ -1259,8 +1490,17 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         ctx.restore();
       }
     }
+
+    if (penTracePoints.length > 1) {
+      drawTraceOnCanvas(ctx, penTracePoints, penTraceClosed, {
+        scaleX,
+        scaleY,
+        strokeStyle: "#000000",
+        lineWidth: Math.max(1, 2 * Math.min(scaleX, scaleY)),
+      });
+    }
     return offscreen;
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, penTracePoints, penTraceClosed]);
 
   const dl = useCallback((dataUrl: string, ext: string) => {
     const a = document.createElement("a");
@@ -1268,6 +1508,110 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     a.href = dataUrl;
     a.click();
   }, []);
+
+  const dlText = useCallback((text: string, ext: string, mime: string) => {
+    const url = URL.createObjectURL(new Blob([text], { type: mime }));
+    const a = document.createElement("a");
+    a.download = `engraving-${Date.now()}.${ext}`;
+    a.href = url;
+    a.click();
+    setTimeout(() => URL.revokeObjectURL(url), 0);
+  }, []);
+
+  const togglePenTrace = useCallback(() => {
+    setPenTraceActive((active) => {
+      const nextActive = !active;
+      if (nextActive) {
+        setEraserActive(false);
+        setWarpMode(false);
+      } else {
+        setPenTraceHover(null);
+      }
+      return nextActive;
+    });
+  }, []);
+
+  const closePenTrace = useCallback(() => {
+    if (penTracePoints.length < 3) {
+      toast.error(t("toast.penTraceNeedPoints"));
+      return;
+    }
+    setPenTraceClosed(true);
+    setPenTraceHover(null);
+  }, [penTracePoints.length, t]);
+
+  const undoPenTracePoint = useCallback(() => {
+    setPenTracePoints((current) => current.slice(0, -1));
+    setPenTraceClosed(false);
+  }, []);
+
+  const canUndoPenTrace = penTracePoints.length > 0;
+  const canUseUndo = canUndo || canUndoPenTrace;
+
+  const handleHeaderUndo = useCallback(() => {
+    if (canUndoPenTrace && (penTraceActive || !canUndo)) {
+      undoPenTracePoint();
+      return;
+    }
+    handleUndo();
+  }, [canUndo, canUndoPenTrace, handleUndo, penTraceActive, undoPenTracePoint]);
+
+  const clearPenTrace = useCallback(() => {
+    setPenTracePoints([]);
+    setPenTraceClosed(false);
+    setPenTraceHover(null);
+  }, []);
+
+  const applyPenTraceAsDesign = useCallback(() => {
+    if (penTracePoints.length < 2) {
+      toast.error(t("toast.penTraceNeedLine"));
+      return;
+    }
+    const svg = createPenTraceSvg({
+      points: penTracePoints,
+      closed: penTraceClosed,
+      width: displayWidth,
+      height: displayHeight,
+      strokeWidth: 2,
+    });
+    loadDesign(svgToDataUrl(svg), {
+      x: 0,
+      y: 0,
+      scale: 1,
+      scaleX: 1,
+      scaleY: 1,
+      rotation: 0,
+      opacity: 1,
+      naturalWidth: displayWidth,
+      naturalHeight: displayHeight,
+      flipH: false,
+      flipV: false,
+      filters: { ...DEFAULT_FILTERS },
+      warpMesh: null,
+    });
+    setPenTraceActive(false);
+    setPenTraceHover(null);
+    toast.success(t("toast.penTraceLoaded"));
+  }, [displayWidth, displayHeight, loadDesign, penTraceClosed, penTracePoints, t]);
+
+  const downloadPenTraceSvg = useCallback(() => {
+    if (penTracePoints.length < 2) {
+      toast.error(t("toast.penTraceNeedLine"));
+      return;
+    }
+    dlText(
+      createActualSizePenTraceSvg({
+        points: penTracePoints,
+        closed: penTraceClosed,
+        displayWidth,
+        displayHeight,
+        widthIn: material.widthIn,
+        heightIn: material.heightIn,
+      }),
+      "svg",
+      "image/svg+xml;charset=utf-8",
+    );
+  }, [displayWidth, displayHeight, dlText, material.heightIn, material.widthIn, penTraceClosed, penTracePoints, t]);
 
   // --- Remove Background ---
   const handleRemoveBackground = useCallback(() => {
@@ -1316,7 +1660,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const handleExportPng = useCallback(() => {
     gatedExport(() => {
       const c = getExportCanvas();
-      if (c) dl(c.toDataURL("image/png"), "png");
+      if (c) dl(setPngDpi(c.toDataURL("image/png")), "png");
     });
   }, [gatedExport, getExportCanvas, dl]);
 
@@ -1331,9 +1675,26 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       ctx.fillStyle = bg;
       ctx.fillRect(0, 0, flat.width, flat.height);
       ctx.drawImage(c, 0, 0);
-      dl(flat.toDataURL("image/jpeg", 0.95), "jpg");
+      dl(setJpegDpi(flat.toDataURL("image/jpeg", 0.95)), "jpg");
     });
   }, [gatedExport, getExportCanvas, dl]);
+
+  const handleExportSvg = useCallback(() => {
+    gatedExport(() => {
+      const c = getExportCanvas();
+      if (!c) return;
+      const pngDataUrl = setPngDpi(c.toDataURL("image/png"));
+      dlText(
+        createActualSizeSvg({
+          pngDataUrl,
+          widthIn: material.widthIn,
+          heightIn: material.heightIn,
+        }),
+        "svg",
+        "image/svg+xml;charset=utf-8",
+      );
+    });
+  }, [gatedExport, getExportCanvas, dlText, material]);
 
   const handleExportPdf = useCallback(async () => {
     gatedExport(async () => {
@@ -1352,7 +1713,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     });
   }, [gatedExport, getExportCanvas, material]);
 
-  const canExport = !!(partPhoto || design);
+  const canExport = !!(partPhoto || design || penTracePoints.length > 1);
 
   // --- Resize handle drag logic ---
   const handleResizeMouseDown = useCallback(
@@ -1495,6 +1856,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // --- Warp mode helpers ---
   const enableWarpMode = useCallback(() => {
     if (!design) return;
+    setPenTraceActive(false);
+    setPenTraceHover(null);
     const imgW = design.naturalWidth * design.scale * design.scaleX;
     const imgH = design.naturalHeight * design.scale * design.scaleY;
     const mesh: WarpMesh = design.warpMesh ?? {
@@ -1668,9 +2031,62 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const unitLabel = unit === "in" ? t("panel.material.unit.in") : t("panel.material.unit.mm");
   const screenPpiLabel = t("editor.ppiLabel", { ppi: Math.round(screenPpi) });
+  const materialDisplaySize = `${formatUnit(material.widthIn)} × ${formatUnit(material.heightIn)}`;
+  const selectedPresetName =
+    MATERIAL_PRESETS.find((preset) => preset.id === selectedPresetId)?.name ?? "Custom Size";
+  const assistantContext = useMemo<CanvasAssistantContext>(
+    () => ({
+      locale,
+      material: {
+        presetName: selectedPresetName,
+        widthIn: material.widthIn,
+        heightIn: material.heightIn,
+        displaySize: materialDisplaySize,
+      },
+      canvas: {
+        displayWidthPx: displayWidth,
+        displayHeightPx: displayHeight,
+        screenPpi: Math.round(screenPpi),
+        exportDpi: EXPORT_DPI,
+        rulerVisible: showRuler,
+      },
+      partPhoto: {
+        loaded: !!partPhoto,
+        rotationDeg: partRotation,
+      },
+      design: design
+        ? {
+            loaded: true,
+            size: currentDesignSizeLabel ?? "not measured",
+            rotationDeg: design.rotation,
+            scalePercent: Math.round(design.scale * ((design.scaleX + design.scaleY) / 2) * 100),
+            flipH: design.flipH,
+            flipV: design.flipV,
+            hasWarp: !!design.warpMesh,
+            eraserUsed: !!eraserMaskRef.current,
+            filters: design.filters,
+          }
+        : null,
+    }),
+    [
+      currentDesignSizeLabel,
+      design,
+      displayHeight,
+      displayWidth,
+      locale,
+      materialDisplaySize,
+      material.heightIn,
+      material.widthIn,
+      partPhoto,
+      partRotation,
+      screenPpi,
+      selectedPresetName,
+      showRuler,
+    ],
+  );
 
   return (
-    <div className="min-h-screen bg-background text-foreground flex flex-col">
+    <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col">
       {cropOpen && designSrc && (
         <CropModal
           open={cropOpen}
@@ -1698,14 +2114,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           }}
         />
       )}
+      <CanvasAssistant context={assistantContext} />
 
-      {/* Mobile warning banner */}
-      <div className="md:hidden bg-amber-500/10 border-b border-amber-500/30 px-4 py-2.5 flex items-center gap-2 shrink-0">
-        <span className="text-amber-500 text-sm">💻</span>
-        <p className="text-xs text-amber-400">{t("editor.mobileWarning")}</p>
-      </div>
       {/* Header */}
-      <header className="border-b border-border bg-card px-4 py-3 shrink-0">
+      <header className="sticky top-0 z-50 border-b border-border bg-card px-4 py-3 shrink-0">
         <div className="mx-auto max-w-7xl flex items-center justify-between gap-4">
           <div className="flex items-center gap-3 min-w-0">
             <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
@@ -1718,7 +2130,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             {/* Undo / Redo */}
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="sm" variant="ghost" onClick={handleUndo} disabled={!canUndo}>
+                <Button
+                  aria-label={t("editor.tooltip.undo")}
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleHeaderUndo}
+                  disabled={!canUseUndo}
+                >
                   <Undo2 className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
@@ -1726,7 +2144,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             </Tooltip>
             <Tooltip>
               <TooltipTrigger asChild>
-                <Button size="sm" variant="ghost" onClick={handleRedo} disabled={!canRedo}>
+                <Button
+                  aria-label={t("editor.tooltip.redo")}
+                  size="sm"
+                  variant="ghost"
+                  onClick={handleRedo}
+                  disabled={!canRedo}
+                >
                   <Redo2 className="h-4 w-4" />
                 </Button>
               </TooltipTrigger>
@@ -1753,6 +2177,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <Button
                   size="sm"
                   variant={showRuler ? "secondary" : "ghost"}
+                  aria-label={t("editor.tooltip.ruler")}
                   className="hidden sm:flex"
                   onClick={() => setShowRuler(!showRuler)}
                 >
@@ -1767,6 +2192,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <Button
                   size="sm"
                   variant={resizeMode ? "secondary" : "ghost"}
+                  aria-label={t("editor.tooltip.workspaceResize")}
                   className="hidden sm:flex"
                   onClick={() => setResizeMode(!resizeMode)}
                 >
@@ -1794,13 +2220,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             </div>
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
-                <Button size="sm" disabled={!canExport}>
+                <Button aria-label={t("editor.export")} size="sm" disabled={!canExport}>
                   <Download className="mr-1.5 h-4 w-4" />
                   <span className="hidden sm:inline">{t("editor.export")}</span>
                   <ChevronDown className="ml-1 h-3 w-3" />
                 </Button>
               </DropdownMenuTrigger>
               <DropdownMenuContent align="end">
+                <DropdownMenuItem onClick={handleExportSvg}>{t("editor.export.svgXtool")}</DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem onClick={handleExportPng}>{t("editor.export.png")}</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExportJpeg("white")}>{t("editor.export.jpegWhite")}</DropdownMenuItem>
                 <DropdownMenuItem onClick={() => handleExportJpeg("black")}>{t("editor.export.jpegBlack")}</DropdownMenuItem>
@@ -1814,13 +2242,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         </div>
       </header>
 
-      <div className="flex-1 mx-auto max-w-7xl w-full px-4 py-4 sm:py-6">
-        <div className="grid gap-4 sm:gap-6 lg:grid-cols-[280px_1fr]">
+      <div className="flex-1 mx-auto max-w-7xl w-full px-3 py-3 sm:px-4 sm:py-6">
+        <div className="grid min-w-0 gap-4 sm:gap-6 lg:grid-cols-[280px_1fr]">
 
           {/* Canvas — first on mobile */}
-          <div ref={canvasContainerRef} className="flex flex-col items-center gap-3 order-1 lg:order-2">
+          <div ref={canvasContainerRef} className="flex min-w-0 w-full flex-col items-center gap-3 overflow-hidden order-1 lg:order-2">
             {/* Ruler + workspace layout */}
-            <div className="flex flex-col" style={{ width: displayWidth + (showRuler ? 20 : 0) }}>
+            <div
+              className="flex max-w-full flex-col"
+              style={{ width: displayWidth + rulerThickness }}
+            >
               {/* Top ruler (above canvas) */}
               {showRuler && (
                 <div className="flex">
@@ -1850,7 +2281,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   className={`relative rounded-lg border-2 overflow-hidden transition-colors ${
                     isDropHover ? "border-primary" : "border-border"
                   }`}
-                  style={{ width: displayWidth, height: displayHeight }}
+                  style={{
+                    width: displayWidth,
+                    height: displayHeight,
+                    touchAction: design || penTraceActive ? "none" : "pan-y",
+                  }}
                   onDragOver={(e) => { e.preventDefault(); setIsDropHover(true); }}
                   onDragLeave={() => setIsDropHover(false)}
                   onDrop={handleDrop}
@@ -1860,18 +2295,87 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 width={displayWidth}
                 height={displayHeight}
                 className="block"
-                style={{ cursor: design ? (eraserActive ? "crosshair" : (isDragging ? "grabbing" : "grab")) : "default" }}
+                style={{
+                  width: displayWidth,
+                  height: displayHeight,
+                  cursor: penTraceActive ? "crosshair" : design ? (eraserActive ? "crosshair" : (isDragging ? "grabbing" : "grab")) : "default",
+                  touchAction: design || penTraceActive ? "none" : "pan-y",
+                }}
                 onMouseDown={handleMouseDown}
                 onMouseMove={handleMouseMove}
                 onMouseUp={handleMouseUp}
-                onMouseLeave={handleMouseUp}
+                onMouseLeave={() => { setPenTraceHover(null); handleMouseUp(); }}
                 onTouchStart={handleTouchStart}
                 onTouchMove={handleTouchMove}
                 onTouchEnd={handleTouchEnd}
               />
 
+              {(penTraceActive || penTracePoints.length > 0) && (() => {
+                const tracePath = buildTracePath(penTracePoints, penTraceClosed);
+                const previewPath =
+                  penTraceActive && penTraceHover && !penTraceClosed && penTracePoints.length > 0
+                    ? buildTracePath([...penTracePoints, penTraceHover], false)
+                    : "";
+                return (
+                  <svg
+                    className="absolute inset-0 z-30 overflow-visible"
+                    style={{ width: displayWidth, height: displayHeight, pointerEvents: "none" }}
+                    viewBox={`0 0 ${displayWidth} ${displayHeight}`}
+                  >
+                    {tracePath && (
+                      <path
+                        d={tracePath}
+                        fill="none"
+                        stroke="rgba(250, 204, 21, 0.95)"
+                        strokeWidth="2"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeDasharray={penTraceClosed ? undefined : "8 5"}
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
+                    {previewPath && (
+                      <path
+                        d={previewPath}
+                        fill="none"
+                        stroke="rgba(255, 255, 255, 0.75)"
+                        strokeWidth="1.5"
+                        strokeLinecap="round"
+                        strokeLinejoin="round"
+                        strokeDasharray="4 5"
+                        vectorEffect="non-scaling-stroke"
+                      />
+                    )}
+                    {penTracePoints.map((point, index) => (
+                      <circle
+                        key={`${index}-${point.x}-${point.y}`}
+                        cx={point.x}
+                        cy={point.y}
+                        r={index === 0 ? 5 : 4}
+                        fill={index === 0 ? "#22c55e" : "#facc15"}
+                        stroke="#111827"
+                        strokeWidth="2"
+                        style={{
+                          cursor: penTraceActive ? "move" : "default",
+                          pointerEvents: penTraceActive ? "auto" : "none",
+                        }}
+                        onMouseDown={(e) => handlePenTracePointMouseDown(e, index)}
+                      />
+                    ))}
+                  </svg>
+                );
+              })()}
+
+              {penTraceActive && (
+                <div className="absolute top-2 left-1/2 z-40 -translate-x-1/2 pointer-events-none">
+                  <span className="rounded bg-black/75 px-2 py-0.5 text-[10px] text-white whitespace-nowrap">
+                    {t("canvas.penTraceHint")}
+                  </span>
+                </div>
+              )}
+
               {/* Design bounding-box resize handles (normal mode) */}
-              {design && !eraserActive && !warpMode && (() => {
+              {design && !eraserActive && !warpMode && !penTraceActive && (() => {
                 const imgW = design.naturalWidth * design.scale * design.scaleX;
                 const imgH = design.naturalHeight * design.scale * design.scaleY;
                 const cx = design.x + imgW / 2;
@@ -2179,6 +2683,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
               </div>
             </div>
 
+            <XtoolSettingsConverterPanel />
+
             {/* Step 2: Part photo */}
             <div className="rounded-lg border border-border bg-card p-4 space-y-3">
               <div className="flex items-center gap-2">
@@ -2200,7 +2706,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <Button
                   variant="ghost" size="sm"
                   className="w-full text-destructive hover:text-destructive"
-                  onClick={() => { setPartPhoto(null); setPartPhotoSrc(null); if (partInputRef.current) partInputRef.current.value = ""; }}
+                  onClick={() => {
+                    setPartPhoto(null);
+                    setPartPhotoSrc(null);
+                    setPenTraceActive(false);
+                    clearPenTrace();
+                    if (partInputRef.current) partInputRef.current.value = "";
+                  }}
                 >
                   <Trash2 className="mr-2 h-3.5 w-3.5" /> {t("panel.partPhoto.removePhoto")}
                 </Button>
@@ -2213,6 +2725,82 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 >
                   <Crop className="mr-1 h-3 w-3" /> {t("panel.partPhoto.cropPhoto")}
                 </Button>
+              )}
+              {partPhoto && (
+                <div className="space-y-2 rounded-md border border-border/60 bg-secondary/30 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <PenTool className="h-3.5 w-3.5 text-primary" />
+                      {t("panel.penTrace.title")}
+                    </span>
+                    {penTraceActive && (
+                      <span className="text-[10px] font-medium text-primary">{t("panel.warp.active")}</span>
+                    )}
+                  </div>
+                  <div className="flex gap-1.5">
+                    <Button
+                      variant={penTraceActive ? "secondary" : "ghost"}
+                      size="sm"
+                      className="flex-1 h-7 text-xs"
+                      onClick={togglePenTrace}
+                    >
+                      <PenTool className="mr-1 h-3 w-3" />
+                      {penTraceActive ? t("panel.penTrace.done") : t("panel.penTrace.start")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="flex-1 h-7 text-xs"
+                      onClick={closePenTrace}
+                      disabled={penTracePoints.length < 3 || penTraceClosed}
+                    >
+                      {t("panel.penTrace.close")}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={undoPenTracePoint}
+                      disabled={penTracePoints.length === 0}
+                    >
+                      {t("panel.penTrace.undoPoint")}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={clearPenTrace}
+                      disabled={penTracePoints.length === 0}
+                    >
+                      {t("panel.penTrace.clear")}
+                    </Button>
+                  </div>
+                  <div className="grid grid-cols-2 gap-1.5">
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={applyPenTraceAsDesign}
+                      disabled={penTracePoints.length < 2}
+                    >
+                      {t("panel.penTrace.useAsDesign")}
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 text-xs"
+                      onClick={downloadPenTraceSvg}
+                      disabled={penTracePoints.length < 2}
+                    >
+                      {t("panel.penTrace.downloadSvg")}
+                    </Button>
+                  </div>
+                  <p className="text-[10px] text-muted-foreground leading-relaxed">
+                    {t("panel.penTrace.helper", { count: penTracePoints.length })}
+                  </p>
+                </div>
               )}
               {partPhoto && (
                 <div className="space-y-2">
@@ -2355,6 +2943,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 </div>
               )}
             </div>
+
+            <AiComposePanel
+              currentDesignSrc={designSrc}
+              locale={locale}
+              onApply={(dataUrl) => loadDesign(dataUrl)}
+            />
 
             {/* Step 4: Adjust */}
             {design && (
@@ -2520,7 +3114,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                           variant={eraserActive ? "secondary" : "ghost"}
                           size="sm"
                           className="flex-1 h-7 text-xs"
-                          onClick={() => setEraserActive((v) => !v)}
+                          onClick={() => {
+                            setPenTraceActive(false);
+                            setPenTraceHover(null);
+                            setEraserActive((v) => !v);
+                          }}
                         >
                           <Eraser className="mr-1 h-3 w-3" />
                           {eraserActive ? t("panel.eraser.erasing") : t("panel.eraser.eraser")}

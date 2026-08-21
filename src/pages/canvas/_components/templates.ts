@@ -19,6 +19,12 @@ export const ENGRAVING_TEMPLATES: EngravingTemplate[] = [
     url: "/templates/sig-scroll-duo.svg",
   },
   {
+    id: "p365-x-reticle-red-911",
+    name: "P365 X Reticle Red 9/11",
+    category: "SIG Sauer",
+    url: "/templates/p365-x-reticle-red-911.png",
+  },
+  {
     id: "sw-full",
     name: "S&W Full",
     category: "Smith & Wesson",

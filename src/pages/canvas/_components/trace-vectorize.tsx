@@ -755,10 +755,16 @@ export default function TraceVectorize({
   useEffect(() => {
     setImg(null);
     setLoadError(false);
+    let cancelled = false;
+    let objectUrl: string | null = null;
     const image = new Image();
     image.crossOrigin = "anonymous";
-    image.onload = () => setImg(image);
-    image.onerror = () => setLoadError(true);
+    image.onload = () => {
+      if (!cancelled) setImg(image);
+    };
+    image.onerror = () => {
+      if (!cancelled) setLoadError(true);
+    };
 
     // Remote CDN URLs: proxy through fetch to avoid CORS taint
     if (designSrc.startsWith("data:") || designSrc.startsWith("blob:")) {
@@ -767,11 +773,22 @@ export default function TraceVectorize({
       fetch(designSrc)
         .then(r => r.blob())
         .then(blob => {
-          const typed = new Blob([blob], { type: "image/svg+xml" });
-          image.src = URL.createObjectURL(typed);
+          objectUrl = URL.createObjectURL(blob);
+          if (cancelled) {
+            URL.revokeObjectURL(objectUrl);
+            return;
+          }
+          image.src = objectUrl;
         })
-        .catch(() => setLoadError(true));
+        .catch(() => {
+          if (!cancelled) setLoadError(true);
+        });
     }
+
+    return () => {
+      cancelled = true;
+      if (objectUrl) URL.revokeObjectURL(objectUrl);
+    };
   }, [designSrc]);
 
   if (loadError) {

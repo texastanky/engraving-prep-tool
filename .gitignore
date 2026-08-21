@@ -31,3 +31,7 @@ tsconfig.tsbuildinfo
 
 # Environment variables
 .env*
+.vercel/
+
+# Local account store
+.data/
