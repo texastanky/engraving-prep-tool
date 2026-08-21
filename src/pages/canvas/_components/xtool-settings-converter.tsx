@@ -1,6 +1,15 @@
-import { useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
+import { Checkbox } from "@/components/ui/checkbox.tsx";
+import {
+  ContextMenu,
+  ContextMenuContent,
+  ContextMenuItem,
+  ContextMenuSeparator,
+  ContextMenuShortcut,
+  ContextMenuTrigger,
+} from "@/components/ui/context-menu.tsx";
 import {
   Dialog,
   DialogContent,
@@ -719,6 +728,7 @@ function XtoolSettingsConverterPanel() {
   );
   const [rows, setRows] = useState<ConvertedPreset[]>([]);
   const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [selectedIds, setSelectedIds] = useState<string[]>([]);
   const [sourceName, setSourceName] = useState("");
   const [pasteText, setPasteText] = useState("");
   const [query, setQuery] = useState("");
@@ -728,6 +738,13 @@ function XtoolSettingsConverterPanel() {
   const selectedRow = useMemo(
     () => rows.find((row) => row.id === selectedId) || null,
     [rows, selectedId],
+  );
+
+  const selectedIdSet = useMemo(() => new Set(selectedIds), [selectedIds]);
+
+  const selectedRows = useMemo(
+    () => rows.filter((row) => selectedIdSet.has(row.id)),
+    [rows, selectedIdSet],
   );
 
   const filteredRows = useMemo(() => {
@@ -743,10 +760,40 @@ function XtoolSettingsConverterPanel() {
 
   const fields = mappingFields(selectedRow);
   const notes = guidanceText(selectedRow);
+  const selectedVisibleCount = filteredRows.filter((row) => selectedIdSet.has(row.id)).length;
+  const allVisibleSelected = filteredRows.length > 0 && selectedVisibleCount === filteredRows.length;
+
+  const toggleRowSelection = useCallback((rowId: string, checked?: boolean) => {
+    setSelectedId(rowId);
+    setSelectedIds((current) => {
+      const isSelected = current.includes(rowId);
+      const shouldSelect = checked ?? !isSelected;
+      if (shouldSelect && !isSelected) return [...current, rowId];
+      if (!shouldSelect && isSelected) return current.filter((id) => id !== rowId);
+      return current;
+    });
+  }, []);
+
+  const selectVisibleRows = useCallback(() => {
+    const nextIds = filteredRows.map((row) => row.id);
+    if (!nextIds.length) {
+      toast.info("No visible presets to select.");
+      return;
+    }
+    setSelectedIds(nextIds);
+    setSelectedId(nextIds[0]);
+    toast.success(`Selected ${nextIds.length} visible preset${nextIds.length === 1 ? "" : "s"}.`);
+  }, [filteredRows]);
+
+  const clearSelectedRows = useCallback(() => {
+    setSelectedIds([]);
+    setSelectedId(null);
+  }, []);
 
   const loadRows = (nextRows: ConvertedPreset[], nextSourceName: string) => {
     setRows(nextRows);
     setSelectedId(nextRows[0]?.id ?? null);
+    setSelectedIds(nextRows[0] ? [nextRows[0].id] : []);
     setSourceName(nextSourceName);
     setQuery("");
     setProcessFilter("all");
@@ -781,16 +828,16 @@ function XtoolSettingsConverterPanel() {
     loadRows(EXAMPLE_ROWS.map(normalizeRow), "example rows");
   };
 
-  const persistSavedPresets = (nextPresets: SavedPreset[]) => {
+  const persistSavedPresets = useCallback((nextPresets: SavedPreset[]) => {
     if (!writeSavedPresets(nextPresets)) {
       toast.error("Could not save presets in this browser.");
       return false;
     }
     setSavedPresets(nextPresets);
     return true;
-  };
+  }, []);
 
-  const saveRowsLocally = (rowsToSave: ConvertedPreset[]) => {
+  const saveRowsLocally = useCallback((rowsToSave: ConvertedPreset[]) => {
     if (!rowsToSave.length) {
       toast.info("No converted presets to save yet.");
       return;
@@ -821,7 +868,26 @@ function XtoolSettingsConverterPanel() {
         ? "Updated saved presets locally."
         : `Saved ${savedCount} preset${savedCount === 1 ? "" : "s"} locally.`,
     );
-  };
+  }, [persistSavedPresets, savedPresets, sourceName]);
+
+  const saveSelectedRows = useCallback(() => {
+    saveRowsLocally(selectedRows);
+  }, [selectedRows, saveRowsLocally]);
+
+  useEffect(() => {
+    if (!open) return;
+
+    const handleSaveRequest = () => saveSelectedRows();
+    const handleSelectAllRequest = () => selectVisibleRows();
+
+    window.addEventListener("pgs-save-request", handleSaveRequest);
+    window.addEventListener("pgs-select-all-request", handleSelectAllRequest);
+
+    return () => {
+      window.removeEventListener("pgs-save-request", handleSaveRequest);
+      window.removeEventListener("pgs-select-all-request", handleSelectAllRequest);
+    };
+  }, [open, saveSelectedRows, selectVisibleRows]);
 
   const loadSavedRows = () => {
     if (!savedPresets.length) {
@@ -877,7 +943,24 @@ function XtoolSettingsConverterPanel() {
         </div>
       </div>
 
-      <DialogContent className="max-h-[92vh] gap-0 overflow-hidden p-0 sm:max-w-[min(1180px,calc(100vw-2rem))]">
+      <DialogContent
+        className="max-h-[92vh] gap-0 overflow-hidden p-0 sm:max-w-[min(1180px,calc(100vw-2rem))]"
+        onKeyDown={(event) => {
+          const target = event.target as HTMLElement;
+          if (target.closest("input, textarea, [contenteditable='true']")) return;
+          if (!(event.ctrlKey || event.metaKey)) return;
+
+          const key = event.key.toLowerCase();
+          if (key === "a") {
+            event.preventDefault();
+            selectVisibleRows();
+          }
+          if (key === "s") {
+            event.preventDefault();
+            saveSelectedRows();
+          }
+        }}
+      >
         <div className="border-b border-border bg-card px-5 py-4">
           <DialogHeader className="gap-1 pr-8">
             <DialogTitle className="flex items-center gap-2 text-base">
@@ -952,6 +1035,7 @@ function XtoolSettingsConverterPanel() {
                     setPasteText("");
                     setRows([]);
                     setSelectedId(null);
+                    setSelectedIds([]);
                     setSourceName("");
                   }}
                 >
@@ -975,13 +1059,13 @@ function XtoolSettingsConverterPanel() {
               <div className="grid grid-cols-2 gap-2">
                 <Button
                   className="h-8 text-xs"
-                  disabled={!selectedRow}
+                  disabled={!selectedRows.length}
                   size="sm"
                   type="button"
                   variant="secondary"
-                  onClick={() => saveRowsLocally(selectedRow ? [selectedRow] : [])}
+                  onClick={saveSelectedRows}
                 >
-                  Save selected
+                  Save selected{selectedRows.length ? ` (${selectedRows.length})` : ""}
                 </Button>
                 <Button
                   className="h-8 text-xs"
@@ -1059,6 +1143,9 @@ function XtoolSettingsConverterPanel() {
                   <TableProperties className="h-4 w-4 text-primary" />
                   <h3 className="text-sm font-semibold">Converted Presets</h3>
                   <Badge variant="outline">{filteredRows.length} shown</Badge>
+                  <Badge variant={selectedRows.length ? "default" : "outline"}>
+                    {selectedRows.length} selected
+                  </Badge>
                 </div>
                 <p className="mt-1 text-xs text-muted-foreground">
                   {sourceName ? `Source: ${sourceName}` : "No library loaded yet"}
@@ -1074,14 +1161,24 @@ function XtoolSettingsConverterPanel() {
                 </Button>
                 <Button
                   className="h-8 text-xs"
-                  disabled={!selectedRow}
+                  disabled={!selectedRows.length}
                   size="sm"
                   type="button"
                   variant="secondary"
-                  onClick={() => saveRowsLocally(selectedRow ? [selectedRow] : [])}
+                  onClick={saveSelectedRows}
                 >
                   <Save className="h-3.5 w-3.5" />
-                  Save
+                  Save{selectedRows.length ? ` (${selectedRows.length})` : ""}
+                </Button>
+                <Button
+                  className="h-8 text-xs"
+                  disabled={!filteredRows.length}
+                  size="sm"
+                  type="button"
+                  variant="secondary"
+                  onClick={selectVisibleRows}
+                >
+                  Select visible
                 </Button>
                 <Button
                   className="h-8 text-xs"
@@ -1122,67 +1219,114 @@ function XtoolSettingsConverterPanel() {
               </Select>
             </div>
 
-            <div className="overflow-x-auto rounded-md border border-border">
-              <table className="min-w-[820px] text-left text-xs">
-                <thead className="bg-secondary/70 text-[10px] uppercase tracking-wider text-muted-foreground">
-                  <tr>
-                    <th className="px-2 py-2 font-medium">#</th>
-                    <th className="px-2 py-2 font-medium">Material</th>
-                    <th className="px-2 py-2 font-medium">Preset</th>
-                    <th className="px-2 py-2 font-medium">Process</th>
-                    <th className="px-2 py-2 font-medium">Power</th>
-                    <th className="px-2 py-2 font-medium">Speed</th>
-                    <th className="px-2 py-2 font-medium">Lines/cm</th>
-                    <th className="px-2 py-2 font-medium">DPI</th>
-                    <th className="px-2 py-2 font-medium">Freq kHz</th>
-                    <th className="px-2 py-2 font-medium">Cross</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {!rows.length && (
-                    <tr>
-                      <td className="px-3 py-8 text-center text-muted-foreground" colSpan={10}>
-                        Import a CLB or CSV file to begin.
-                      </td>
-                    </tr>
-                  )}
-                  {rows.length > 0 && filteredRows.length === 0 && (
-                    <tr>
-                      <td className="px-3 py-8 text-center text-muted-foreground" colSpan={10}>
-                        No presets match the current filters.
-                      </td>
-                    </tr>
-                  )}
-                  {filteredRows.map((row, index) => {
-                    const isSelected = row.id === selectedId;
-                    return (
-                      <tr
-                        key={row.id}
-                        className={`cursor-pointer border-t border-border transition-colors ${
-                          isSelected ? "bg-primary/15" : "hover:bg-secondary/40"
-                        }`}
-                        onClick={() => setSelectedId(row.id)}
-                      >
-                        <td className="px-2 py-2 font-mono text-muted-foreground">{index + 1}</td>
-                        <td className="px-2 py-2 font-medium">{row.material}</td>
-                        <td className="px-2 py-2">{row.preset}</td>
-                        <td className="px-2 py-2">{row.xcsProcess}</td>
-                        <td className="px-2 py-2 font-mono">{powerDisplay(row)}</td>
-                        <td className="px-2 py-2 font-mono">{row.speed}</td>
-                        <td className="px-2 py-2 font-mono">{row.linesPerCm}</td>
-                        <td className="px-2 py-2 font-mono">{row.dpi}</td>
-                        <td className="px-2 py-2 font-mono">{row.frequencyKHz}</td>
-                        <td className="px-2 py-2">
-                          <Badge variant={row.crossHatch === "On" ? "default" : "outline"}>
-                            {row.crossHatch}
-                          </Badge>
-                        </td>
+            <ContextMenu>
+              <ContextMenuTrigger asChild>
+                <div className="overflow-x-auto rounded-md border border-border">
+                  <table className="min-w-[880px] text-left text-xs">
+                    <thead className="bg-secondary/70 text-[10px] uppercase tracking-wider text-muted-foreground">
+                      <tr>
+                        <th className="w-10 px-2 py-2 font-medium">
+                          <Checkbox
+                            aria-label="Select all visible presets"
+                            checked={allVisibleSelected ? true : selectedVisibleCount > 0 ? "indeterminate" : false}
+                            disabled={!filteredRows.length}
+                            onCheckedChange={(checked) => {
+                              if (checked) {
+                                selectVisibleRows();
+                              } else {
+                                clearSelectedRows();
+                              }
+                            }}
+                          />
+                        </th>
+                        <th className="px-2 py-2 font-medium">#</th>
+                        <th className="px-2 py-2 font-medium">Material</th>
+                        <th className="px-2 py-2 font-medium">Preset</th>
+                        <th className="px-2 py-2 font-medium">Process</th>
+                        <th className="px-2 py-2 font-medium">Power</th>
+                        <th className="px-2 py-2 font-medium">Speed</th>
+                        <th className="px-2 py-2 font-medium">Lines/cm</th>
+                        <th className="px-2 py-2 font-medium">DPI</th>
+                        <th className="px-2 py-2 font-medium">Freq kHz</th>
+                        <th className="px-2 py-2 font-medium">Cross</th>
                       </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+                    </thead>
+                    <tbody>
+                      {!rows.length && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-muted-foreground" colSpan={11}>
+                            Import a CLB or CSV file to begin.
+                          </td>
+                        </tr>
+                      )}
+                      {rows.length > 0 && filteredRows.length === 0 && (
+                        <tr>
+                          <td className="px-3 py-8 text-center text-muted-foreground" colSpan={11}>
+                            No presets match the current filters.
+                          </td>
+                        </tr>
+                      )}
+                      {filteredRows.map((row, index) => {
+                        const isActive = row.id === selectedId;
+                        const isSelected = selectedIdSet.has(row.id);
+                        return (
+                          <tr
+                            key={row.id}
+                            aria-selected={isSelected}
+                            className={`cursor-pointer border-t border-border transition-colors ${
+                              isSelected
+                                ? "bg-primary/15"
+                                : isActive
+                                  ? "bg-secondary/50"
+                                  : "hover:bg-secondary/40"
+                            }`}
+                            onClick={() => toggleRowSelection(row.id)}
+                          >
+                            <td className="px-2 py-2">
+                              <Checkbox
+                                aria-label={`Select ${row.material} ${row.preset}`}
+                                checked={isSelected}
+                                onClick={(event) => event.stopPropagation()}
+                                onCheckedChange={(checked) => toggleRowSelection(row.id, checked === true)}
+                              />
+                            </td>
+                            <td className="px-2 py-2 font-mono text-muted-foreground">{index + 1}</td>
+                            <td className="px-2 py-2 font-medium">{row.material}</td>
+                            <td className="px-2 py-2">{row.preset}</td>
+                            <td className="px-2 py-2">{row.xcsProcess}</td>
+                            <td className="px-2 py-2 font-mono">{powerDisplay(row)}</td>
+                            <td className="px-2 py-2 font-mono">{row.speed}</td>
+                            <td className="px-2 py-2 font-mono">{row.linesPerCm}</td>
+                            <td className="px-2 py-2 font-mono">{row.dpi}</td>
+                            <td className="px-2 py-2 font-mono">{row.frequencyKHz}</td>
+                            <td className="px-2 py-2">
+                              <Badge variant={row.crossHatch === "On" ? "default" : "outline"}>
+                                {row.crossHatch}
+                              </Badge>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </ContextMenuTrigger>
+              <ContextMenuContent>
+                <ContextMenuItem disabled={!selectedRows.length} onSelect={saveSelectedRows}>
+                  <Save className="h-4 w-4" />
+                  Save selected
+                  <ContextMenuShortcut>Ctrl+S</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuItem disabled={!filteredRows.length} onSelect={selectVisibleRows}>
+                  Select all visible
+                  <ContextMenuShortcut>Ctrl+A</ContextMenuShortcut>
+                </ContextMenuItem>
+                <ContextMenuSeparator />
+                <ContextMenuItem disabled={!selectedRows.length} onSelect={clearSelectedRows}>
+                  Clear selection
+                </ContextMenuItem>
+              </ContextMenuContent>
+            </ContextMenu>
           </section>
 
           <aside className="min-w-0 space-y-3 p-4">

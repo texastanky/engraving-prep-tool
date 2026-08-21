@@ -54,4 +54,25 @@ describe("xTool settings converter", () => {
     await user.click(within(dialog).getByRole("button", { name: /load saved/i }));
     expect(await within(dialog).findByText("Dark mark")).toBeInTheDocument();
   });
+
+  it("saves more than one selected converted preset", async () => {
+    const user = userEvent.setup();
+    render(<XtoolSettingsConverterPanel />);
+
+    await user.click(screen.getByRole("button", { name: /open full converter/i }));
+    const dialog = await screen.findByRole("dialog");
+
+    await user.click(within(dialog).getByRole("button", { name: /example/i }));
+    await within(dialog).findByText("Dark mark");
+
+    await user.click(within(dialog).getByRole("checkbox", { name: /select brass photo details/i }));
+    await user.click(within(dialog).getByRole("button", { name: /save selected/i }));
+
+    const saved = JSON.parse(localStorage.getItem(savedPresetsKey) || "[]");
+    expect(saved).toHaveLength(2);
+    expect(saved.map((preset: { preset: string }) => preset.preset)).toEqual([
+      "Photo details",
+      "Dark mark",
+    ]);
+  });
 });
