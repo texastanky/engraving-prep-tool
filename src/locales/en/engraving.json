@@ -165,6 +165,12 @@
   "panel.penTrace.clear": "Clear",
   "panel.penTrace.useAsDesign": "Use design",
   "panel.penTrace.downloadSvg": "Download SVG",
+  "panel.penTrace.savePart": "Save traced part",
+  "panel.penTrace.nameLabel": "Traced part name",
+  "panel.penTrace.namePlaceholder": "Part name",
+  "panel.penTrace.defaultPartName": "Traced part {{count}}",
+  "panel.penTrace.savedParts": "Saved traced parts",
+  "panel.penTrace.deleteSavedPart": "Delete {{name}}",
   "panel.penTrace.helper": "{{count}} points. Click around the part edge, drag points to adjust, then close or export.",
 
   "panel.warp.title": "Free Distort",
@@ -221,6 +227,9 @@
   "toast.penTraceNeedLine": "Add at least two trace points first.",
   "toast.penTraceNeedPoints": "Add at least three points before closing the trace.",
   "toast.penTraceLoaded": "Pen trace loaded as the design layer.",
+  "toast.penTracePresetSaved": "Saved {{name}} for later.",
+  "toast.penTracePresetLoaded": "Loaded {{name}}.",
+  "toast.penTracePresetDeleted": "Deleted {{name}}.",
   "toast.lastFreeExport": "Last free export this month — upgrade for unlimited exports.",
   "toast.exportsRemaining_one": "{{count}} free export remaining this month.",
   "toast.exportsRemaining_other": "{{count}} free exports remaining this month."

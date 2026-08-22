@@ -41,9 +41,11 @@ import {
   ArrowLeft,
   ChevronDown,
   Download,
+  FolderOpen,
   ImageIcon,
   Layers,
   Ruler,
+  Save,
   FlipHorizontal,
   FlipVertical,
   RefreshCw,
@@ -69,6 +71,7 @@ import AiComposePanel from "./ai-compose-panel.tsx";
 import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
 import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
+import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
 import { ScanLine, Crop, Wand2, Eraser, Frame, PenTool } from "lucide-react";
 import { toast } from "sonner";
 import CropModal from "./crop-modal.tsx";
@@ -203,6 +206,26 @@ function drawTraceOnCanvas(
   if (closed && points.length > 2) ctx.closePath();
   ctx.stroke();
   ctx.restore();
+}
+
+function normalizeTracePoints(points: Pt[], width: number, height: number): Pt[] {
+  const safeWidth = Math.max(width, 1);
+  const safeHeight = Math.max(height, 1);
+  return points.map((point) => ({
+    x: Math.max(0, Math.min(1, point.x / safeWidth)),
+    y: Math.max(0, Math.min(1, point.y / safeHeight)),
+  }));
+}
+
+function scaleTracePoints(points: Pt[], width: number, height: number): Pt[] {
+  return points.map((point) => ({
+    x: point.x * width,
+    y: point.y * height,
+  }));
+}
+
+function hasSavedTracePoints(preset: CustomPreset): preset is CustomPreset & { tracePoints: Pt[] } {
+  return Array.isArray(preset.tracePoints) && preset.tracePoints.length >= 2;
 }
 
 // A pin on an edge, t=0..1 is position along that edge between its two corners
@@ -537,6 +560,18 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
   }, [initialLocale]);
 
+  const {
+    presets: customPresets,
+    addPreset: addCustomPreset,
+    removePreset: removeCustomPreset,
+  } = useCustomPresets();
+  const tracePresets = useMemo(
+    () => customPresets.filter(hasSavedTracePoints),
+    [customPresets]
+  );
+  const [tracePresetName, setTracePresetName] = useState("");
+  const [pendingTracePreset, setPendingTracePreset] = useState<CustomPreset | null>(null);
+
   const [cropOpen, setCropOpen] = useState(false);
   const [cropPartOpen, setCropPartOpen] = useState(false);
   const [bgRemoving, setBgRemoving] = useState(false);
@@ -808,6 +843,20 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   // Pixels-per-inch on screen for this canvas
   const screenPpi = displayWidth / material.widthIn;
+
+  useEffect(() => {
+    if (!pendingTracePreset) return;
+    if (!hasSavedTracePoints(pendingTracePreset)) {
+      setPendingTracePreset(null);
+      return;
+    }
+    setPenTracePoints(scaleTracePoints(pendingTracePreset.tracePoints, displayWidth, displayHeight));
+    setPenTraceClosed(pendingTracePreset.traceClosed ?? pendingTracePreset.tracePoints.length >= 3);
+    setPenTraceActive(false);
+    setPenTraceHover(null);
+    setPendingTracePreset(null);
+    toast.success(t("toast.penTracePresetLoaded", { name: pendingTracePreset.name }));
+  }, [displayHeight, displayWidth, pendingTracePreset, t]);
 
   // Draw everything
   const draw = useCallback(() => {
@@ -1428,7 +1477,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   // --- Export ---
   const getExportCanvas = useCallback((): HTMLCanvasElement | null => {
-    if (!partPhoto && !design) return null;
+    if (!partPhoto && !design && penTracePoints.length < 2) return null;
     // Export at laser-friendly 300 DPI based on material size
     const expW = Math.round(material.widthIn * EXPORT_DPI);
     const expH = Math.round(material.heightIn * EXPORT_DPI);
@@ -1612,6 +1661,63 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       "image/svg+xml;charset=utf-8",
     );
   }, [displayWidth, displayHeight, dlText, material.heightIn, material.widthIn, penTraceClosed, penTracePoints, t]);
+
+  const savePenTracePreset = useCallback(() => {
+    if (penTracePoints.length < 2) {
+      toast.error(t("toast.penTraceNeedLine"));
+      return;
+    }
+    const name = tracePresetName.trim() || t("panel.penTrace.defaultPartName", { count: tracePresets.length + 1 });
+    const previewSvg = createPenTraceSvg({
+      points: penTracePoints,
+      closed: penTraceClosed,
+      width: displayWidth,
+      height: displayHeight,
+      strokeWidth: 2,
+    });
+
+    addCustomPreset({
+      name,
+      width: material.widthIn,
+      height: material.heightIn,
+      unit,
+      maskDataUrl: svgToDataUrl(previewSvg),
+      tracePoints: normalizeTracePoints(penTracePoints, displayWidth, displayHeight),
+      traceClosed: penTraceClosed,
+      createdAt: new Date().toISOString(),
+      source: "pen-trace",
+    });
+    setTracePresetName("");
+    toast.success(t("toast.penTracePresetSaved", { name }));
+  }, [
+    addCustomPreset,
+    displayHeight,
+    displayWidth,
+    material.heightIn,
+    material.widthIn,
+    penTraceClosed,
+    penTracePoints,
+    t,
+    tracePresetName,
+    tracePresets.length,
+    unit,
+  ]);
+
+  const loadSavedTracePreset = useCallback((preset: CustomPreset) => {
+    if (!hasSavedTracePoints(preset)) return;
+    setSelectedPresetId("custom");
+    setUnit(preset.unit);
+    setMaterial({ widthIn: preset.width, heightIn: preset.height });
+    setPendingTracePreset(preset);
+  }, []);
+
+  const deleteSavedTracePreset = useCallback(
+    (preset: CustomPreset) => {
+      removeCustomPreset(preset.id);
+      toast.success(t("toast.penTracePresetDeleted", { name: preset.name }));
+    },
+    [removeCustomPreset, t]
+  );
 
   // --- Remove Background ---
   const handleRemoveBackground = useCallback(() => {
@@ -2366,14 +2472,6 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 );
               })()}
 
-              {penTraceActive && (
-                <div className="absolute top-2 left-1/2 z-40 -translate-x-1/2 pointer-events-none">
-                  <span className="rounded bg-black/75 px-2 py-0.5 text-[10px] text-white whitespace-nowrap">
-                    {t("canvas.penTraceHint")}
-                  </span>
-                </div>
-              )}
-
               {/* Design bounding-box resize handles (normal mode) */}
               {design && !eraserActive && !warpMode && !penTraceActive && (() => {
                 const imgW = design.naturalWidth * design.scale * design.scaleX;
@@ -2542,7 +2640,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 );
               })()}
 
-              {!partPhoto && !design && (
+              {!partPhoto && !design && penTracePoints.length === 0 && (
                 <div className="absolute inset-0 flex flex-col items-center justify-center text-muted-foreground pointer-events-none">
                   <ImageIcon className="h-10 w-10 mb-3 opacity-25" />
                   <p className="text-sm font-medium text-center px-4">
@@ -2551,7 +2649,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   <p className="text-xs mt-1 opacity-50">{t("canvas.addDesignHint")}</p>
                 </div>
               )}
-              {partPhoto && !design && (
+              {partPhoto && !design && !penTraceActive && penTracePoints.length === 0 && (
                 <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
                   <div className="bg-black/70 rounded-md px-3 py-2 text-center">
                     <Layers className="h-4 w-4 mx-auto mb-1 text-primary opacity-70" />
@@ -2726,7 +2824,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   <Crop className="mr-1 h-3 w-3" /> {t("panel.partPhoto.cropPhoto")}
                 </Button>
               )}
-              {partPhoto && (
+              {(partPhoto || penTracePoints.length > 0) && (
                 <div className="space-y-2 rounded-md border border-border/60 bg-secondary/30 p-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
@@ -2797,9 +2895,67 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       {t("panel.penTrace.downloadSvg")}
                     </Button>
                   </div>
+                  <div className="space-y-1.5">
+                    <Input
+                      value={tracePresetName}
+                      onChange={(e) => setTracePresetName(e.target.value)}
+                      placeholder={t("panel.penTrace.namePlaceholder")}
+                      aria-label={t("panel.penTrace.nameLabel")}
+                      disabled={penTracePoints.length < 2}
+                      className="h-7 text-xs"
+                    />
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 w-full text-xs"
+                      onClick={savePenTracePreset}
+                      disabled={penTracePoints.length < 2}
+                    >
+                      <Save className="mr-1 h-3 w-3" />
+                      {t("panel.penTrace.savePart")}
+                    </Button>
+                  </div>
                   <p className="text-[10px] text-muted-foreground leading-relaxed">
                     {t("panel.penTrace.helper", { count: penTracePoints.length })}
                   </p>
+                </div>
+              )}
+              {tracePresets.length > 0 && (
+                <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-2.5">
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                      <FolderOpen className="h-3.5 w-3.5 text-primary" />
+                      {t("panel.penTrace.savedParts")}
+                    </span>
+                    <span className="text-[10px] text-muted-foreground">{tracePresets.length}</span>
+                  </div>
+                  <div className="max-h-36 space-y-1.5 overflow-y-auto pr-1">
+                    {tracePresets.map((preset) => (
+                      <div key={preset.id} className="flex items-center gap-1.5 rounded-md border border-border/50 bg-background/50 p-1.5">
+                        <button
+                          type="button"
+                          className="min-w-0 flex-1 text-left"
+                          onClick={() => loadSavedTracePreset(preset)}
+                        >
+                          <span className="block truncate text-xs font-medium text-foreground">{preset.name}</span>
+                          <span className="block truncate text-[10px] text-muted-foreground">
+                            {preset.unit === "in"
+                              ? `${preset.width.toFixed(2)}" x ${preset.height.toFixed(2)}"`
+                              : `${inToMm(preset.width).toFixed(1)}mm x ${inToMm(preset.height).toFixed(1)}mm`}
+                          </span>
+                        </button>
+                        <Button
+                          variant="ghost"
+                          size="icon"
+                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          aria-label={t("panel.penTrace.deleteSavedPart", { name: preset.name })}
+                          onClick={() => deleteSavedTracePreset(preset)}
+                        >
+                          <Trash2 className="h-3.5 w-3.5" />
+                        </Button>
+                      </div>
+                    ))}
+                  </div>
                 </div>
               )}
               {partPhoto && (

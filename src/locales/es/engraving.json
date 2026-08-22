@@ -164,6 +164,12 @@
   "panel.penTrace.clear": "Limpiar",
   "panel.penTrace.useAsDesign": "Usar diseño",
   "panel.penTrace.downloadSvg": "Descargar SVG",
+  "panel.penTrace.savePart": "Guardar pieza trazada",
+  "panel.penTrace.nameLabel": "Nombre de pieza trazada",
+  "panel.penTrace.namePlaceholder": "Nombre de pieza",
+  "panel.penTrace.defaultPartName": "Pieza trazada {{count}}",
+  "panel.penTrace.savedParts": "Piezas trazadas guardadas",
+  "panel.penTrace.deleteSavedPart": "Eliminar {{name}}",
   "panel.penTrace.helper": "{{count}} puntos. Haz clic alrededor del borde de la pieza, arrastra puntos para ajustar, luego cierra o exporta.",
 
   "panel.warp.title": "Distorsión Libre",
@@ -220,6 +226,9 @@
   "toast.penTraceNeedLine": "Agrega al menos dos puntos de trazo primero.",
   "toast.penTraceNeedPoints": "Agrega al menos tres puntos antes de cerrar el trazo.",
   "toast.penTraceLoaded": "Trazo con pluma cargado como capa de diseño.",
+  "toast.penTracePresetSaved": "{{name}} guardado para después.",
+  "toast.penTracePresetLoaded": "{{name}} cargado.",
+  "toast.penTracePresetDeleted": "{{name}} eliminado.",
   "toast.lastFreeExport": "Última exportación gratuita este mes — mejora para exportaciones ilimitadas.",
   "toast.exportsRemaining_one": "Te queda {{count}} exportación gratuita este mes.",
   "toast.exportsRemaining_other": "Te quedan {{count}} exportaciones gratuitas este mes."
