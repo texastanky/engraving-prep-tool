@@ -209,7 +209,6 @@
   "canvas.dropActive": "Drop image here",
   "canvas.addDesignHint": "Part photo → then your design",
   "canvas.addDesignPrompt": "Now drop or upload your design",
-  "canvas.uploadDesignStep2": "Upload your design in Step 2",
   "canvas.warpHint": "Click on an edge to add a pin • Drag pins to reshape • Right-click pin to remove",
   "canvas.warpCornerHint": "Round = corners · Diamond = edges (curve) · Click \"Done\" when finished",
   "canvas.penTraceHint": "Click to add points • Drag dots to adjust • Enter closes • Esc exits",

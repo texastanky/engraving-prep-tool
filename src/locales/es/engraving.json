@@ -208,7 +208,6 @@
   "canvas.dropActive": "Suelta la imagen aquí",
   "canvas.addDesignHint": "Foto de la pieza → luego tu diseño",
   "canvas.addDesignPrompt": "Ahora arrastra o sube tu diseño",
-  "canvas.uploadDesignStep2": "Sube tu diseño en el Paso 2",
   "canvas.warpHint": "Haz clic en un borde para agregar un pin • Arrastra los pines para dar forma • Clic derecho en un pin para eliminarlo",
   "canvas.warpCornerHint": "Círculo = esquinas · Diamante = bordes (curva) · Haz clic en \"Listo\" cuando termines",
   "canvas.penTraceHint": "Clic para agregar puntos • Arrastra puntos para ajustar • Enter cierra • Esc sale",

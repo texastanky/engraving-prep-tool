@@ -43,7 +43,6 @@ import {
   Download,
   FolderOpen,
   ImageIcon,
-  Layers,
   Ruler,
   Save,
   FlipHorizontal,
@@ -2649,15 +2648,6 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   <p className="text-xs mt-1 opacity-50">{t("canvas.addDesignHint")}</p>
                 </div>
               )}
-              {partPhoto && !design && !penTraceActive && penTracePoints.length === 0 && (
-                <div className="absolute bottom-3 left-1/2 -translate-x-1/2 pointer-events-none">
-                  <div className="bg-black/70 rounded-md px-3 py-2 text-center">
-                    <Layers className="h-4 w-4 mx-auto mb-1 text-primary opacity-70" />
-                    <p className="text-xs text-white font-medium whitespace-nowrap">{t("canvas.uploadDesignStep2")}</p>
-                  </div>
-                </div>
-              )}
-
               {/* Resize handles (visible when resizeMode is active) */}
               {resizeMode && (
                 <>
