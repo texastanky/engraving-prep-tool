@@ -128,6 +128,10 @@ function clampPointToCanvas(point: Pt, width: number, height: number): Pt {
   };
 }
 
+function clamp01(value: number): number {
+  return Math.max(0, Math.min(1, value));
+}
+
 function buildTracePath(points: Pt[], closed: boolean): string {
   if (!points.length) return "";
   const [first, ...rest] = points;
@@ -285,6 +289,7 @@ function hasSavedTracePoints(preset: CustomPreset): preset is CustomPreset & { t
 
 // A pin on an edge, t=0..1 is position along that edge between its two corners
 type EdgePin = { id: string; t: number; offset: Pt }; // offset = how far this pin has been dragged from its natural position on the straight edge
+type InteriorWarpPin = { id: string; s: number; t: number; offset: Pt; radius: number };
 
 type WarpMesh = {
   tl: Pt; tr: Pt; bl: Pt; br: Pt;         // corners — always present
@@ -292,6 +297,7 @@ type WarpMesh = {
   bottom: EdgePin[];   // pins along bottom edge (bl→br), sorted by t
   left:   EdgePin[];   // pins along left edge (tl→bl), sorted by t
   right:  EdgePin[];   // pins along right edge (tr→br), sorted by t
+  interior: InteriorWarpPin[]; // local pins inside the art for spot corrections
 };
 
 type ImageState = {
@@ -329,6 +335,7 @@ const HISTORY_LIMIT = 80;
 const RULER_THICKNESS = 20;
 const MIN_CANVAS_SIZE = 80;
 const CANVAS_MARGIN = 8;
+const DEFAULT_LOCAL_WARP_RADIUS = 0.24;
 
 // Serializable subset of ImageState (no HTMLImageElement)
 type SavedDesignState = Omit<ImageState, "element">;
@@ -373,6 +380,7 @@ function cloneWarpMesh(mesh: WarpMesh | null): WarpMesh | null {
     bottom: mesh.bottom.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
     left: mesh.left.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
     right: mesh.right.map((pin) => ({ ...pin, offset: { ...pin.offset } })),
+    interior: (mesh.interior ?? []).map((pin) => ({ ...pin, offset: { ...pin.offset } })),
   };
 }
 
@@ -441,7 +449,7 @@ function applyFiltersToCanvas(
  *  Uses Coons patch with quadratic Bezier edges built from the mesh pins.
  *  s = horizontal (left→right), t = vertical (top→bottom)
  */
-function meshPt(mesh: WarpMesh, s: number, t: number): Pt {
+function boundaryMeshPt(mesh: WarpMesh, s: number, t: number): Pt {
   // Build top edge point at s
   const topPt = edgePt(mesh.tl, mesh.tr, mesh.top, s);
   // Build bottom edge point at s
@@ -456,6 +464,33 @@ function meshPt(mesh: WarpMesh, s: number, t: number): Pt {
   return {
     x: (1-t)*topPt.x + t*botPt.x + (1-s)*leftPt.x + s*rightPt.x - cx,
     y: (1-t)*topPt.y + t*botPt.y + (1-s)*leftPt.y + s*rightPt.y - cy,
+  };
+}
+
+function localWarpWeight(distance: number, radius: number): number {
+  if (radius <= 0 || distance >= radius) return 0;
+  const amount = 1 - distance / radius;
+  return amount * amount * (3 - 2 * amount);
+}
+
+function localWarpOffset(mesh: WarpMesh, s: number, t: number): Pt {
+  let x = 0;
+  let y = 0;
+  for (const pin of mesh.interior ?? []) {
+    const distance = Math.hypot(s - pin.s, t - pin.t);
+    const weight = localWarpWeight(distance, pin.radius || DEFAULT_LOCAL_WARP_RADIUS);
+    x += pin.offset.x * weight;
+    y += pin.offset.y * weight;
+  }
+  return { x, y };
+}
+
+function meshPt(mesh: WarpMesh, s: number, t: number): Pt {
+  const base = boundaryMeshPt(mesh, s, t);
+  const offset = localWarpOffset(mesh, s, t);
+  return {
+    x: base.x + offset.x,
+    y: base.y + offset.y,
   };
 }
 
@@ -1634,6 +1669,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           bottom: m.bottom.map(p => ({ ...p, offset: { x: p.offset.x * scaleX, y: p.offset.y * scaleY } })),
           left:   m.left.map(p   => ({ ...p, offset: { x: p.offset.x * scaleX, y: p.offset.y * scaleY } })),
           right:  m.right.map(p  => ({ ...p, offset: { x: p.offset.x * scaleX, y: p.offset.y * scaleY } })),
+          interior: (m.interior ?? []).map(p => ({ ...p, offset: { x: p.offset.x * scaleX, y: p.offset.y * scaleY } })),
         };
         drawWarpedImage(ctx, filtered, scaledMesh, design.opacity, 96);
       } else {
@@ -2139,7 +2175,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       tr: { x: design.x + imgW, y: design.y },
       bl: { x: design.x,        y: design.y + imgH },
       br: { x: design.x + imgW, y: design.y + imgH },
-      top: [], bottom: [], left: [], right: [],
+      top: [], bottom: [], left: [], right: [], interior: [],
     };
     setDesign({ ...design, warpMesh: mesh });
     setWarpMode(true);
@@ -2240,6 +2276,91 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       if (!design?.warpMesh) return;
       const mesh = design.warpMesh;
       setDesign({ ...design, warpMesh: { ...mesh, [edge]: mesh[edge].filter(p => p.id !== pinId) } });
+    },
+    [design]
+  );
+
+  const handleWarpInteriorClick = useCallback(
+    (e: React.MouseEvent) => {
+      if (!design?.warpMesh) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const imgW = design.naturalWidth * design.scale * design.scaleX;
+      const imgH = design.naturalHeight * design.scale * design.scaleY;
+      if (imgW <= 0 || imgH <= 0) return;
+      const pos = getPos(e.clientX, e.clientY);
+      const newPin: InteriorWarpPin = {
+        id: `${Date.now()}`,
+        s: clamp01((pos.x - design.x) / imgW),
+        t: clamp01((pos.y - design.y) / imgH),
+        offset: { x: 0, y: 0 },
+        radius: DEFAULT_LOCAL_WARP_RADIUS,
+      };
+      const mesh = design.warpMesh;
+      setDesign({
+        ...design,
+        warpMesh: {
+          ...mesh,
+          interior: [...(mesh.interior ?? []), newPin],
+        },
+      });
+    },
+    [design, getPos]
+  );
+
+  const handleWarpInteriorPinMouseDown = useCallback(
+    (e: React.MouseEvent, pinId: string) => {
+      if (!design?.warpMesh) return;
+      e.stopPropagation();
+      e.preventDefault();
+      const pin = (design.warpMesh.interior ?? []).find((p) => p.id === pinId);
+      if (!pin) return;
+
+      const onMove = (ev: MouseEvent) => {
+        const pos = getPos(ev.clientX, ev.clientY);
+        updateDesignContinuously((prev) => {
+          if (!prev.warpMesh) return prev;
+          const m = prev.warpMesh;
+          const newPins = (m.interior ?? []).map((p) => {
+            if (p.id !== pinId) return p;
+            const base = boundaryMeshPt(m, p.s, p.t);
+            return {
+              ...p,
+              offset: {
+                x: pos.x - base.x,
+                y: pos.y - base.y,
+              },
+            };
+          });
+          return { ...prev, warpMesh: { ...m, interior: newPins } };
+        });
+      };
+
+      const onUp = () => {
+        commitCurrentDesign();
+        window.removeEventListener("mousemove", onMove);
+        window.removeEventListener("mouseup", onUp);
+      };
+
+      window.addEventListener("mousemove", onMove);
+      window.addEventListener("mouseup", onUp);
+    },
+    [design, getPos, updateDesignContinuously, commitCurrentDesign]
+  );
+
+  const handleWarpInteriorPinRemove = useCallback(
+    (e: React.MouseEvent, pinId: string) => {
+      e.preventDefault();
+      e.stopPropagation();
+      if (!design?.warpMesh) return;
+      const mesh = design.warpMesh;
+      setDesign({
+        ...design,
+        warpMesh: {
+          ...mesh,
+          interior: (mesh.interior ?? []).filter((pin) => pin.id !== pinId),
+        },
+      });
     },
     [design]
   );
@@ -2743,6 +2864,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
               {/* Warp mode — flexible mesh with add/remove pins */}
               {design && warpMode && design.warpMesh && (() => {
                 const mesh = design.warpMesh;
+                const imgW = design.naturalWidth * design.scale * design.scaleX;
+                const imgH = design.naturalHeight * design.scale * design.scaleY;
+                const localPins = mesh.interior ?? [];
                 const edges: ("top"|"bottom"|"left"|"right")[] = ["top", "bottom", "left", "right"];
                 const edgeCorners: Record<"top"|"bottom"|"left"|"right", [keyof Pick<WarpMesh,"tl"|"tr"|"bl"|"br">, keyof Pick<WarpMesh,"tl"|"tr"|"bl"|"br">]> = {
                   top:    ["tl","tr"],
@@ -2772,6 +2896,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     y: a.y + (b.y - a.y) * pin.t + pin.offset.y,
                   };
                 };
+                const localPinPos = (pin: InteriorWarpPin): Pt => {
+                  const base = boundaryMeshPt(mesh, pin.s, pin.t);
+                  return {
+                    x: base.x + pin.offset.x,
+                    y: base.y + pin.offset.y,
+                  };
+                };
                 const corners: { id: keyof Pick<WarpMesh,"tl"|"tr"|"bl"|"br">; pos: Pt; label: string }[] = [
                   { id: "tl", pos: mesh.tl, label: t("editor.warp.cornerTl") },
                   { id: "tr", pos: mesh.tr, label: t("editor.warp.cornerTr") },
@@ -2780,6 +2911,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 ];
                 const CORNER_HW = 12;
                 const PIN_HW = 11;
+                const LOCAL_PIN_HW = 16;
                 return (
                   <>
                     <svg
@@ -2798,6 +2930,35 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                           style={{ pointerEvents: "none" }}
                         />
                       ))}
+                      {/* Transparent artwork hit area for adding local warp dots */}
+                      <rect
+                        data-engraving-warp-interior-hitarea="true"
+                        x={design.x}
+                        y={design.y}
+                        width={imgW}
+                        height={imgH}
+                        fill="transparent"
+                        style={{ pointerEvents: "fill", cursor: "crosshair" }}
+                        onClick={handleWarpInteriorClick}
+                      />
+                      {/* Local warp dot influence preview */}
+                      {localPins.map((pin) => {
+                        const pos = localPinPos(pin);
+                        const radius = Math.max(18, Math.min(imgW, imgH) * (pin.radius || DEFAULT_LOCAL_WARP_RADIUS));
+                        return (
+                          <circle
+                            key={`local-radius-${pin.id}`}
+                            cx={pos.x}
+                            cy={pos.y}
+                            r={radius}
+                            fill="rgba(14,165,233,0.07)"
+                            stroke="rgba(14,165,233,0.45)"
+                            strokeWidth="1.25"
+                            strokeDasharray="4,4"
+                            style={{ pointerEvents: "none" }}
+                          />
+                        );
+                      })}
                       {/* Invisible thick clickable hit areas for adding pins */}
                       {edges.map((edge) => (
                         <polyline
@@ -2847,6 +3008,29 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         );
                       })
                     )}
+                    {/* Local interior handles — blue dots for spot warping */}
+                    {localPins.map((pin, index) => {
+                      const pos = localPinPos(pin);
+                      return (
+                        <button
+                          key={`local-${pin.id}`}
+                          type="button"
+                          data-engraving-local-warp-pin={pin.id}
+                          aria-label={`Local warp dot ${index + 1}`}
+                          className="absolute z-40 box-border rounded-full border-[3px] border-white bg-sky-400 p-0 shadow-[0_0_0_2px_rgba(8,47,73,0.9),0_3px_10px_rgba(0,0,0,0.55)]"
+                          style={{
+                            left: pos.x - LOCAL_PIN_HW / 2,
+                            top: pos.y - LOCAL_PIN_HW / 2,
+                            width: LOCAL_PIN_HW,
+                            height: LOCAL_PIN_HW,
+                            cursor: "move",
+                          }}
+                          onMouseDown={(e) => handleWarpInteriorPinMouseDown(e, pin.id)}
+                          onContextMenu={(e) => handleWarpInteriorPinRemove(e, pin.id)}
+                          title={t("editor.warp.localPinTitle")}
+                        />
+                      );
+                    })}
                     <div className="absolute top-2 left-1/2 -translate-x-1/2 pointer-events-none z-40">
                       <span className="text-[10px] bg-black/70 text-white px-2 py-0.5 rounded whitespace-nowrap">
                         {t("canvas.warpHint")}

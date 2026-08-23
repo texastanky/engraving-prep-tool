@@ -98,6 +98,7 @@
   "editor.warp.cornerBl": "Bottom-left corner",
   "editor.warp.cornerBr": "Bottom-right corner",
   "editor.warp.pinTitle": "Drag to reshape · Right-click to remove",
+  "editor.warp.localPinTitle": "Drag to pull this area · Right-click to remove",
 
   "common.optional": "(optional)",
   "common.reset": "Reset",
@@ -195,10 +196,10 @@
 
   "panel.warp.title": "Free Distort",
   "panel.warp.active": "Active",
-  "panel.warp.enable": "Warp Corners",
+  "panel.warp.enable": "Warp / Dots",
   "panel.warp.done": "Done",
   "panel.warp.reset": "Reset",
-  "panel.warp.hint": "Click any edge to add a pin. Drag orange corners or amber diamonds to reshape. Right-click a diamond to remove it.",
+  "panel.warp.hint": "Click inside the art to add a blue local warp dot. Drag blue dots to pull that area. Click an edge to add an edge pin. Right-click a dot or diamond to remove it.",
 
   "panel.eraser.title": "Eraser Tool",
   "panel.eraser.eraser": "Eraser",
@@ -229,7 +230,7 @@
   "canvas.dropActive": "Drop image here",
   "canvas.addDesignHint": "Part photo → then your design",
   "canvas.addDesignPrompt": "Now drop or upload your design",
-  "canvas.warpHint": "Click on an edge to add a pin • Drag pins to reshape • Right-click pin to remove",
+  "canvas.warpHint": "Click inside art to add blue dots • Drag dots to pull local areas • Right-click to remove",
   "canvas.warpCornerHint": "Round = corners · Diamond = edges (curve) · Click \"Done\" when finished",
   "canvas.penTraceHint": "Click to add points • Drag dots to adjust • Enter closes • Esc exits",
   "canvas.resizeHint": "Shift+drag corner = proportional",

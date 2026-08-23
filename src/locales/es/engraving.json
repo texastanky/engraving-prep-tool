@@ -97,6 +97,7 @@
   "editor.warp.cornerBl": "Esquina inferior izquierda",
   "editor.warp.cornerBr": "Esquina inferior derecha",
   "editor.warp.pinTitle": "Arrastra para dar forma · Clic derecho para eliminar",
+  "editor.warp.localPinTitle": "Arrastra para mover esta área · Clic derecho para eliminar",
 
   "common.optional": "(opcional)",
   "common.reset": "Restablecer",
@@ -194,10 +195,10 @@
 
   "panel.warp.title": "Distorsión Libre",
   "panel.warp.active": "Activo",
-  "panel.warp.enable": "Deformar Esquinas",
+  "panel.warp.enable": "Deformar / Puntos",
   "panel.warp.done": "Listo",
   "panel.warp.reset": "Restablecer",
-  "panel.warp.hint": "Haz clic en un borde para agregar un pin. Arrastra las esquinas naranjas o los diamantes ámbar para dar forma. Clic derecho en un diamante para eliminarlo.",
+  "panel.warp.hint": "Haz clic dentro del arte para agregar un punto azul de deformación local. Arrastra puntos azules para mover esa área. Haz clic en un borde para agregar un pin de borde. Clic derecho en un punto o diamante para eliminarlo.",
 
   "panel.eraser.title": "Borrador",
   "panel.eraser.eraser": "Borrador",
@@ -228,7 +229,7 @@
   "canvas.dropActive": "Suelta la imagen aquí",
   "canvas.addDesignHint": "Foto de la pieza → luego tu diseño",
   "canvas.addDesignPrompt": "Ahora arrastra o sube tu diseño",
-  "canvas.warpHint": "Haz clic en un borde para agregar un pin • Arrastra los pines para dar forma • Clic derecho en un pin para eliminarlo",
+  "canvas.warpHint": "Haz clic dentro del arte para agregar puntos azules • Arrastra puntos para mover áreas locales • Clic derecho para eliminar",
   "canvas.warpCornerHint": "Círculo = esquinas · Diamante = bordes (curva) · Haz clic en \"Listo\" cuando termines",
   "canvas.penTraceHint": "Clic para agregar puntos • Arrastra puntos para ajustar • Enter cierra • Esc sale",
   "canvas.resizeHint": "Shift+arrastra esquina = proporcional",
