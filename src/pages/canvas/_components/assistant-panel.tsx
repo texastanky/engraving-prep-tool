@@ -61,6 +61,10 @@ export type CanvasAssistantContext = {
 
 type CanvasAssistantProps = {
   context: CanvasAssistantContext;
+  designImageSrc?: string | null;
+  partPhotoSrc?: string | null;
+  pendingQuestion?: string | null;
+  onPendingQuestionHandled?: () => void;
 };
 
 const MESSAGE_LIMIT = 12;
@@ -135,7 +139,37 @@ function localReply(question: string, context: CanvasAssistantContext) {
   ].join("\n");
 }
 
-export default function CanvasAssistant({ context }: CanvasAssistantProps) {
+function resizeForVision(src: string): Promise<string> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const maxEdge = 512;
+        const scale = Math.min(1, maxEdge / Math.max(img.width, img.height));
+        const width = Math.max(1, Math.round(img.width * scale));
+        const height = Math.max(1, Math.round(img.height * scale));
+        const canvas = document.createElement("canvas");
+        canvas.width = width;
+        canvas.height = height;
+        canvas.getContext("2d")?.drawImage(img, 0, 0, width, height);
+        resolve(canvas.toDataURL("image/jpeg", 0.82));
+      } catch {
+        resolve("");
+      }
+    };
+    img.onerror = () => resolve("");
+    img.src = src;
+  });
+}
+
+export default function CanvasAssistant({
+  context,
+  designImageSrc,
+  partPhotoSrc,
+  pendingQuestion,
+  onPendingQuestionHandled,
+}: CanvasAssistantProps) {
   const [open, setOpen] = useState(false);
   const [input, setInput] = useState("");
   const [pending, setPending] = useState(false);
@@ -185,12 +219,19 @@ export default function CanvasAssistant({ context }: CanvasAssistantProps) {
       setPending(true);
 
       try {
+        const [designImageDataUrl, partPhotoDataUrl] = await Promise.all([
+          designImageSrc ? resizeForVision(designImageSrc) : Promise.resolve(""),
+          partPhotoSrc ? resizeForVision(partPhotoSrc) : Promise.resolve(""),
+        ]);
+
         const response = await fetch("/api/assistant", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
             messages: compactMessages(nextMessages),
             context,
+            ...(designImageDataUrl ? { designImageDataUrl } : {}),
+            ...(partPhotoDataUrl ? { partPhotoDataUrl } : {}),
           }),
         });
 
@@ -228,8 +269,14 @@ export default function CanvasAssistant({ context }: CanvasAssistantProps) {
         setPending(false);
       }
     },
-    [context, messages, pending],
+    [context, designImageSrc, messages, partPhotoSrc, pending],
   );
+
+  useEffect(() => {
+    if (!pendingQuestion || pending) return;
+    void submitQuestion(pendingQuestion);
+    onPendingQuestionHandled?.();
+  }, [onPendingQuestionHandled, pending, pendingQuestion, submitQuestion]);
 
   const handleSubmit = useCallback(
     (event: React.FormEvent<HTMLFormElement>) => {

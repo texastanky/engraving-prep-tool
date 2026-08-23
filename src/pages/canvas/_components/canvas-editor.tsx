@@ -73,7 +73,7 @@ import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
 import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
 import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
-import { ScanLine, Crop, Wand2, Eraser, Frame, PenTool } from "lucide-react";
+import { ScanLine, Crop, Wand2, Eraser, Frame, PenTool, Sparkles } from "lucide-react";
 import { toast } from "sonner";
 import CropModal from "./crop-modal.tsx";
 import { removeBackground, roundCorners } from "./image-utils.ts";
@@ -2231,6 +2231,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [matHInput, setMatHInput] = useState("4.00");
   const [templatesOpen, setTemplatesOpen] = useState(false);
   const [traceOpen, setTraceOpen] = useState(false);
+  const [assistantQuestion, setAssistantQuestion] = useState<string | null>(null);
   const [openCategories, setOpenCategories] = useState<Record<string, boolean>>({});
 
   const applyCustomMaterial = () => {
@@ -2372,7 +2373,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           }}
         />
       )}
-      <CanvasAssistant context={assistantContext} />
+      <CanvasAssistant
+        context={assistantContext}
+        designImageSrc={designSrc}
+        partPhotoSrc={partPhotoSrc}
+        pendingQuestion={assistantQuestion}
+        onPendingQuestionHandled={() => setAssistantQuestion(null)}
+      />
 
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-card px-4 py-3 shrink-0">
@@ -2972,6 +2979,17 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   onClick={() => setCropPartOpen(true)}
                 >
                   <Crop className="mr-1 h-3 w-3" /> {t("panel.partPhoto.cropPhoto")}
+                </Button>
+              )}
+              {partPhoto && (
+                <Button
+                  variant="ghost"
+                  size="sm"
+                  className="w-full text-xs"
+                  onClick={() => setAssistantQuestion("Look at this material photo. Identify the material and finish, then suggest cautious starting speed, power, and frequency settings for my laser. Remind me to test on scrap first.")}
+                >
+                  <Sparkles className="mr-1 h-3 w-3 text-primary" />
+                  Identify Material
                 </Button>
               )}
               {(partPhoto || penTracePoints.length > 0) && (
@@ -3707,6 +3725,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
                     <Button variant="ghost" size="sm" className="w-full text-xs" onClick={resetFilters}>
                       <RefreshCw className="mr-1.5 h-3 w-3" /> Reset All Adjustments
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      className="w-full h-7 text-xs"
+                      onClick={() => setAssistantQuestion("Analyze this design for laser engraving. Comment on contrast, fine detail density, edge sharpness, dithering needs, and how it should engrave on the current material.")}
+                    >
+                      <Sparkles className="mr-1 h-3 w-3 text-primary" />
+                      Analyze for Laser
                     </Button>
                   </TabsContent>
                 </Tabs>

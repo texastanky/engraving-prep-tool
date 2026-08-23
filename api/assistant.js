@@ -1,7 +1,8 @@
 import { requireAuth } from "../server/auth.js";
 
-const MAX_REQUEST_CHARS = 12000;
-const DEFAULT_MODEL = "gpt-5-mini";
+const MAX_REQUEST_CHARS = 11_000_000;
+const MAX_IMAGE_DATA_URL_CHARS = 4_000_000;
+const DEFAULT_MODEL = "gpt-4o-mini";
 
 function readBody(req) {
   if (!req.body) return {};
@@ -21,6 +22,13 @@ function cleanText(value, maxLength = 1200) {
   return value.replace(/\s+/g, " ").trim().slice(0, maxLength);
 }
 
+function cleanDataUrl(value) {
+  if (typeof value !== "string") return null;
+  if (!value.startsWith("data:image/")) return null;
+  if (value.length > MAX_IMAGE_DATA_URL_CHARS) return null;
+  return value;
+}
+
 function normalizeMessages(value) {
   if (!Array.isArray(value)) return [];
 
@@ -31,6 +39,41 @@ function normalizeMessages(value) {
       content: cleanText(message?.content),
     }))
     .filter((message) => message.content.length > 0);
+}
+
+function buildMessagesWithImages(messages, designImageDataUrl, partPhotoDataUrl) {
+  if (!designImageDataUrl && !partPhotoDataUrl) return messages;
+
+  const nextMessages = [...messages];
+  const lastUserIndex = nextMessages.reduce(
+    (currentIndex, message, index) => (message.role === "user" ? index : currentIndex),
+    -1,
+  );
+  if (lastUserIndex < 0) return nextMessages;
+
+  const imageParts = [];
+  if (designImageDataUrl) {
+    imageParts.push({
+      type: "image_url",
+      image_url: { url: designImageDataUrl, detail: "low" },
+    });
+  }
+  if (partPhotoDataUrl) {
+    imageParts.push({
+      type: "image_url",
+      image_url: { url: partPhotoDataUrl, detail: "low" },
+    });
+  }
+
+  nextMessages[lastUserIndex] = {
+    role: "user",
+    content: [
+      { type: "text", text: nextMessages[lastUserIndex].content },
+      ...imageParts,
+    ],
+  };
+
+  return nextMessages;
 }
 
 function summarizeContext(context) {
@@ -85,11 +128,25 @@ function summarizeContext(context) {
   };
 }
 
-function systemPrompt(locale) {
+function systemPrompt(locale, hasDesignImage, hasPartPhoto) {
+  const visionNotes = [
+    hasDesignImage
+      ? "The user shared the current design image; analyze its engraving suitability directly."
+      : "",
+    hasPartPhoto
+      ? "The user shared a material/part photo; identify visible material and finish cautiously before suggesting starting settings."
+      : "",
+  ].filter(Boolean);
+
   return [
     "You are the in-app Engraving Assistant for a laser engraving layout tool.",
+    ...visionNotes,
     "Help users prepare artwork, size designs, choose export formats, and think through laser setup for stainless steel, anodized aluminum, coated metal, polymer, wood, acrylic, and firearm parts.",
-    "Use the provided canvas context when it helps. Do not claim to inspect uploaded images; you only receive text state.",
+    hasDesignImage || hasPartPhoto
+      ? "Use the provided images and canvas context together. If image detail is ambiguous, say what you can and cannot tell from the photo."
+      : "Use the provided canvas context when it helps. Do not claim to inspect uploaded images when none were provided.",
+    "When analyzing a design image, comment on contrast, fine detail density at the intended size, dithering needs, edge sharpness, and expected engraving result on the selected material.",
+    "When analyzing a material photo, identify visible material and finish, then give cautious starting speed/power/frequency guidance and recommend a test grid on scrap.",
     "When the user asks about outline detection, laser-safe areas, or filling art inside a part, explain the Engrave AI flow: crop/rotate part photo, detect outline, tune tolerance/safety inset/points, use Trace + Clip Art, fill the artwork, then export.",
     "For advertising copy around firearm engraving, focus on customization, engraving, personalization, restoration, and business contact information. Do not frame the business as selling firearms unless the user explicitly asks and provides compliant wording.",
     "For settings, give cautious starting guidance and recommend test grids on scrap because machines, lenses, coatings, and materials vary.",
@@ -118,7 +175,14 @@ export default async function handler(req, res) {
   const body = readBody(req);
   const messages = normalizeMessages(body.messages);
   const context = summarizeContext(body.context);
-  const requestSize = JSON.stringify({ messages, context }).length;
+  const designImageDataUrl = cleanDataUrl(body.designImageDataUrl);
+  const partPhotoDataUrl = cleanDataUrl(body.partPhotoDataUrl);
+  const requestSize = JSON.stringify({
+    messages,
+    context,
+    designImageDataUrl,
+    partPhotoDataUrl,
+  }).length;
 
   if (requestSize > MAX_REQUEST_CHARS || messages.length === 0) {
     res.status(400).json({ error: "bad_request" });
@@ -131,6 +195,10 @@ export default async function handler(req, res) {
     return;
   }
 
+  const messagesWithImages = buildMessagesWithImages(messages, designImageDataUrl, partPhotoDataUrl);
+  const hasDesignImage = Boolean(designImageDataUrl);
+  const hasPartPhoto = Boolean(partPhotoDataUrl);
+
   try {
     const response = await fetch("https://api.openai.com/v1/chat/completions", {
       method: "POST",
@@ -141,12 +209,12 @@ export default async function handler(req, res) {
       body: JSON.stringify({
         model: process.env.OPENAI_ASSISTANT_MODEL || DEFAULT_MODEL,
         messages: [
-          { role: "system", content: systemPrompt(context.locale) },
+          { role: "system", content: systemPrompt(context.locale, hasDesignImage, hasPartPhoto) },
           {
             role: "user",
             content: `Current canvas context:\n${JSON.stringify(context, null, 2)}`,
           },
-          ...messages,
+          ...messagesWithImages,
         ],
         max_completion_tokens: 700,
       }),
