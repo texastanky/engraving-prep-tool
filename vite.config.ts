@@ -126,9 +126,21 @@ function localApiPlugin(): Plugin {
   };
 }
 
+const packageJson = JSON.parse(
+  fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8"),
+) as { version?: string };
+
+const appVersion = packageJson.version ?? "0.0.0";
+const updateManifestUrl =
+  process.env.VITE_UPDATE_MANIFEST_URL?.trim() || "https://engraving-prep-tool.vercel.app/update.json";
+
 // https://vite.dev/config/
 export default defineConfig({
   base: "./",
+  define: {
+    __APP_UPDATE_MANIFEST_URL__: JSON.stringify(updateManifestUrl),
+    __APP_VERSION__: JSON.stringify(appVersion),
+  },
   server: {
     host: "0.0.0.0",
     port: 5173,

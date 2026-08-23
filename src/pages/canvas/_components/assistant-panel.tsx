@@ -36,6 +36,11 @@ export type CanvasAssistantContext = {
     loaded: boolean;
     rotationDeg: number;
   };
+  engraveAi: {
+    outlineReady: boolean;
+    tracePoints: number;
+    designClippedToOutline: boolean;
+  };
   design: null | {
     loaded: boolean;
     size: string;
@@ -75,9 +80,21 @@ function compactMessages(messages: AssistantMessage[]) {
 function localReply(question: string, context: CanvasAssistantContext) {
   const lower = question.toLowerCase();
   const hasDesign = !!context.design;
+  const hasDetectedOutline = context.engraveAi.outlineReady;
   const sizeLine = hasDesign
     ? `Your current design is ${context.design?.size} on a ${context.material.displaySize} canvas.`
     : `Your canvas is set to ${context.material.displaySize}; upload a design before checking exact placement.`;
+  const outlineLine = hasDetectedOutline
+    ? `A closed outline with ${context.engraveAi.tracePoints} points is ready${context.engraveAi.designClippedToOutline ? ", and the design is clipped to it" : ""}.`
+    : "Use Engrave AI to detect the material outline from a part photo, then use Trace + Clip Art before final export.";
+
+  if (lower.includes("outline") || lower.includes("detect") || lower.includes("clip") || lower.includes("fill area") || lower.includes("laser area")) {
+    return [
+      "AI is not connected yet, so here is local engraving guidance.",
+      "",
+      `${sizeLine} ${outlineLine} For the cleanest result, crop/rotate the part photo first, run Detect Outline, adjust tolerance and safety inset, then use Trace + Clip Art. After that, use Fill on the design so the art covers the traced area while the clip keeps it inside the laser-safe boundary.`,
+    ].join("\n");
+  }
 
   if (lower.includes("stainless") || lower.includes("ss") || lower.includes("steel")) {
     return [

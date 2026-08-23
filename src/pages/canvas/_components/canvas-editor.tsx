@@ -4,6 +4,7 @@ import { Button } from "@/components/ui/button.tsx";
 import { Label } from "@/components/ui/label.tsx";
 import { Slider } from "@/components/ui/slider.tsx";
 import { Input } from "@/components/ui/input.tsx";
+import { Switch } from "@/components/ui/switch.tsx";
 import {
   Select,
   SelectContent,
@@ -68,6 +69,7 @@ import {
 import { ENGRAVING_TEMPLATES, TEMPLATE_CATEGORIES } from "./templates.ts";
 import AiComposePanel from "./ai-compose-panel.tsx";
 import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.tsx";
+import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
 import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
 import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
@@ -101,6 +103,20 @@ type ImageFilters = {
 
 type Pt = { x: number; y: number };
 
+type PenTraceStyle = {
+  strokeColor: string;
+  strokeWidth: number;
+  fillEnabled: boolean;
+  fillColor: string;
+};
+
+const DEFAULT_PEN_TRACE_STYLE: PenTraceStyle = {
+  strokeColor: "#facc15",
+  strokeWidth: 2,
+  fillEnabled: false,
+  fillColor: "#000000",
+};
+
 function formatPathNumber(value: number): string {
   return Number(value.toFixed(3)).toString();
 }
@@ -123,24 +139,36 @@ function buildTracePath(points: Pt[], closed: boolean): string {
   return segments.join(" ");
 }
 
+function previewTraceFill(color: string): string {
+  if (/^#[0-9a-fA-F]{6}$/.test(color)) return `${color}33`;
+  return color;
+}
+
 function createPenTraceSvg({
   points,
   closed,
   width,
   height,
   strokeWidth = 2,
+  strokeColor = "#000000",
+  fillEnabled = false,
+  fillColor = "#000000",
 }: {
   points: Pt[];
   closed: boolean;
   width: number;
   height: number;
   strokeWidth?: number;
+  strokeColor?: string;
+  fillEnabled?: boolean;
+  fillColor?: string;
 }): string {
   const path = buildTracePath(points, closed);
   const w = formatPathNumber(width);
   const h = formatPathNumber(height);
+  const fill = fillEnabled && closed ? fillColor : "none";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}" height="${h}" viewBox="0 0 ${w} ${h}">
-  <path d="${path}" fill="none" stroke="#000000" stroke-width="${formatPathNumber(strokeWidth)}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
+  <path d="${path}" fill="${fill}" stroke="${strokeColor}" stroke-width="${formatPathNumber(strokeWidth)}" stroke-linecap="round" stroke-linejoin="round" vector-effect="non-scaling-stroke" />
 </svg>`;
 }
 
@@ -151,6 +179,7 @@ function createActualSizePenTraceSvg({
   displayHeight,
   widthIn,
   heightIn,
+  style = DEFAULT_PEN_TRACE_STYLE,
 }: {
   points: Pt[];
   closed: boolean;
@@ -158,9 +187,14 @@ function createActualSizePenTraceSvg({
   displayHeight: number;
   widthIn: number;
   heightIn: number;
+  style?: PenTraceStyle;
 }): string {
   const widthMm = inToMm(widthIn);
   const heightMm = inToMm(heightIn);
+  const strokeWidthMm = Math.max(
+    0.05,
+    ((style.strokeWidth / displayWidth) * widthMm + (style.strokeWidth / displayHeight) * heightMm) / 2
+  );
   const scaledPoints = points.map((point) => ({
     x: (point.x / displayWidth) * widthMm,
     y: (point.y / displayHeight) * heightMm,
@@ -168,9 +202,10 @@ function createActualSizePenTraceSvg({
   const path = buildTracePath(scaledPoints, closed);
   const w = formatPathNumber(widthMm);
   const h = formatPathNumber(heightMm);
+  const fill = style.fillEnabled && closed ? style.fillColor : "none";
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${w}mm" height="${h}mm" viewBox="0 0 ${w} ${h}">
   <title>Manual pen trace ${widthIn.toFixed(3)}in x ${heightIn.toFixed(3)}in</title>
-  <path d="${path}" fill="none" stroke="#000000" stroke-width="0.2" stroke-linecap="round" stroke-linejoin="round" />
+  <path d="${path}" fill="${fill}" stroke="${style.strokeColor}" stroke-width="${formatPathNumber(strokeWidthMm)}" stroke-linecap="round" stroke-linejoin="round" />
 </svg>`;
 }
 
@@ -186,6 +221,7 @@ function drawTraceOnCanvas(
     scaleX?: number;
     scaleY?: number;
     strokeStyle?: string;
+    fillStyle?: string;
     lineWidth?: number;
   } = {}
 ) {
@@ -203,8 +239,28 @@ function drawTraceOnCanvas(
     ctx.lineTo(point.x * scaleX, point.y * scaleY);
   }
   if (closed && points.length > 2) ctx.closePath();
+  if (closed && options.fillStyle) {
+    ctx.fillStyle = options.fillStyle;
+    ctx.fill();
+  }
   ctx.stroke();
   ctx.restore();
+}
+
+function clipToTracePath(
+  ctx: CanvasRenderingContext2D,
+  points: Pt[],
+  scaleX = 1,
+  scaleY = 1
+) {
+  if (points.length < 3) return;
+  ctx.beginPath();
+  ctx.moveTo(points[0].x * scaleX, points[0].y * scaleY);
+  for (const point of points.slice(1)) {
+    ctx.lineTo(point.x * scaleX, point.y * scaleY);
+  }
+  ctx.closePath();
+  ctx.clip();
 }
 
 function normalizeTracePoints(points: Pt[], width: number, height: number): Pt[] {
@@ -584,6 +640,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [penTracePoints, setPenTracePoints] = useState<Pt[]>([]);
   const [penTraceClosed, setPenTraceClosed] = useState(false);
   const [penTraceHover, setPenTraceHover] = useState<Pt | null>(null);
+  const [penTraceStyle, setPenTraceStyle] = useState<PenTraceStyle>(DEFAULT_PEN_TRACE_STYLE);
+  const [clipDesignToTrace, setClipDesignToTrace] = useState(false);
   const penTraceDragPointRef = useRef<number | null>(null);
   const isErasingRef = useRef(false);
   const [partPhoto, setPartPhoto] = useState<HTMLImageElement | null>(null);
@@ -851,11 +909,23 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
     setPenTracePoints(scaleTracePoints(pendingTracePreset.tracePoints, displayWidth, displayHeight));
     setPenTraceClosed(pendingTracePreset.traceClosed ?? pendingTracePreset.tracePoints.length >= 3);
+    if (pendingTracePreset.traceStyle) {
+      setPenTraceStyle((current) => ({
+        ...current,
+        ...pendingTracePreset.traceStyle,
+      }));
+    }
     setPenTraceActive(false);
     setPenTraceHover(null);
     setPendingTracePreset(null);
     toast.success(t("toast.penTracePresetLoaded", { name: pendingTracePreset.name }));
   }, [displayHeight, displayWidth, pendingTracePreset, t]);
+
+  useEffect(() => {
+    if (clipDesignToTrace && (!penTraceClosed || penTracePoints.length < 3)) {
+      setClipDesignToTrace(false);
+    }
+  }, [clipDesignToTrace, penTraceClosed, penTracePoints.length]);
 
   // Draw everything
   const draw = useCallback(() => {
@@ -909,27 +979,32 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const imgH = design.naturalHeight * design.scale * design.scaleY;
       const cx = design.x + imgW / 2;
       const cy = design.y + imgH / 2;
+      const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
 
       ctx.save();
-      ctx.globalAlpha = design.opacity;
-      ctx.translate(cx, cy);
-      ctx.rotate((design.rotation * Math.PI) / 180);
-      if (design.flipH) ctx.scale(-1, 1);
-      if (design.flipV) ctx.scale(1, -1);
+      if (shouldClipDesign) {
+        clipToTracePath(ctx, penTracePoints);
+      }
 
       // Apply filters via offscreen canvas
       const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH, eraserMaskRef.current);
 
       if (design.warpMesh) {
-        ctx.restore();
         drawWarpedImage(ctx, filtered, design.warpMesh, design.opacity);
       } else {
+        ctx.save();
+        ctx.globalAlpha = design.opacity;
+        ctx.translate(cx, cy);
+        ctx.rotate((design.rotation * Math.PI) / 180);
+        if (design.flipH) ctx.scale(-1, 1);
+        if (design.flipV) ctx.scale(1, -1);
         ctx.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
         ctx.restore();
       }
+      ctx.restore();
     }
 
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1226,7 +1301,6 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const handlePenTracePointMouseDown = useCallback(
     (e: React.MouseEvent, pointIndex: number) => {
-      if (!penTraceActive) return;
       e.stopPropagation();
       e.preventDefault();
       penTraceDragPointRef.current = pointIndex;
@@ -1247,7 +1321,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [displayWidth, displayHeight, getPos, penTraceActive]
+    [displayWidth, displayHeight, getPos]
   );
 
   const getEraserPosInDesign = useCallback((canvasX: number, canvasY: number): { x: number; y: number } | null => {
@@ -1448,10 +1522,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // Quick actions
   const handleFill = useCallback(() => {
     if (!design) return;
-    const coverScale = Math.min(
+    const coverScale = Math.max(
       displayWidth / design.naturalWidth,
       displayHeight / design.naturalHeight
     );
+    const filledWidthIn = displayToInches(design.naturalWidth * coverScale, displayWidth, material.widthIn);
+    const filledHeightIn = displayToInches(design.naturalHeight * coverScale, displayHeight, material.heightIn);
     setDesign({
       ...design,
       scale: coverScale,
@@ -1461,7 +1537,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       y: (displayHeight - design.naturalHeight * coverScale) / 2,
       rotation: 0,
     });
-  }, [design, displayWidth, displayHeight]);
+    if (unit === "in") {
+      setDesignWidthInput(filledWidthIn.toFixed(2));
+      setDesignHeightInput(filledHeightIn.toFixed(2));
+    } else {
+      setDesignWidthInput(inToMm(filledWidthIn).toFixed(1));
+      setDesignHeightInput(inToMm(filledHeightIn).toFixed(1));
+    }
+  }, [design, displayWidth, displayHeight, material.heightIn, material.widthIn, unit]);
 
   const handleCenter = useCallback(() => {
     if (!design) return;
@@ -1513,7 +1596,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const cx = design.x * scaleX + imgW / 2;
       const cy = design.y * scaleY + imgH / 2;
       const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH, eraserMaskRef.current);
+      const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
 
+      ctx.save();
+      if (shouldClipDesign) {
+        clipToTracePath(ctx, penTracePoints, scaleX, scaleY);
+      }
       if (design.warpMesh) {
         const m = design.warpMesh;
         const scaledMesh: WarpMesh = {
@@ -1537,18 +1625,20 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         ctx.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
         ctx.restore();
       }
+      ctx.restore();
     }
 
     if (penTracePoints.length > 1) {
       drawTraceOnCanvas(ctx, penTracePoints, penTraceClosed, {
         scaleX,
         scaleY,
-        strokeStyle: "#000000",
-        lineWidth: Math.max(1, 2 * Math.min(scaleX, scaleY)),
+        strokeStyle: penTraceStyle.strokeColor,
+        fillStyle: penTraceStyle.fillEnabled && penTraceClosed ? penTraceStyle.fillColor : undefined,
+        lineWidth: Math.max(1, penTraceStyle.strokeWidth * Math.min(scaleX, scaleY)),
       });
     }
     return offscreen;
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, penTracePoints, penTraceClosed]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, penTracePoints, penTraceClosed, penTraceStyle, clipDesignToTrace]);
 
   const dl = useCallback((dataUrl: string, ext: string) => {
     const a = document.createElement("a");
@@ -1608,7 +1698,53 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     setPenTracePoints([]);
     setPenTraceClosed(false);
     setPenTraceHover(null);
+    setClipDesignToTrace(false);
   }, []);
+
+  const applyDetectedTrace = useCallback(
+    (points: Pt[], clipDesign: boolean) => {
+      setPenTracePoints(points);
+      setPenTraceClosed(true);
+      setPenTraceActive(false);
+      setPenTraceHover(null);
+      setClipDesignToTrace(clipDesign);
+      toast.success(t(clipDesign ? "toast.engraveAiTraceClipped" : "toast.engraveAiTraceReady"));
+    },
+    [t]
+  );
+
+  const applyDetectedMaskAsDesign = useCallback(
+    (dataUrl: string, points?: Pt[]) => {
+      const restoreState: SavedDesignState = {
+        x: 0,
+        y: 0,
+        scale: 1,
+        scaleX: 1,
+        scaleY: 1,
+        rotation: 0,
+        opacity: 1,
+        naturalWidth: displayWidth,
+        naturalHeight: displayHeight,
+        flipH: false,
+        flipV: false,
+        filters: DEFAULT_FILTERS,
+        warpMesh: null,
+      };
+      loadDesign(dataUrl, restoreState);
+      setDesignSrc(dataUrl);
+      if (points && points.length >= 3) {
+        setPenTracePoints(points);
+        setPenTraceClosed(true);
+        setPenTraceActive(false);
+        setPenTraceHover(null);
+        setClipDesignToTrace(false);
+      }
+      setDesignWidthInput(unit === "in" ? material.widthIn.toFixed(2) : inToMm(material.widthIn).toFixed(1));
+      setDesignHeightInput(unit === "in" ? material.heightIn.toFixed(2) : inToMm(material.heightIn).toFixed(1));
+      toast.success(t("toast.engraveAiMaskLoaded"));
+    },
+    [displayHeight, displayWidth, loadDesign, material.heightIn, material.widthIn, t, unit]
+  );
 
   const applyPenTraceAsDesign = useCallback(() => {
     if (penTracePoints.length < 2) {
@@ -1620,7 +1756,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       closed: penTraceClosed,
       width: displayWidth,
       height: displayHeight,
-      strokeWidth: 2,
+      strokeWidth: penTraceStyle.strokeWidth,
+      strokeColor: penTraceStyle.strokeColor,
+      fillEnabled: penTraceStyle.fillEnabled,
+      fillColor: penTraceStyle.fillColor,
     });
     loadDesign(svgToDataUrl(svg), {
       x: 0,
@@ -1640,7 +1779,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     setPenTraceActive(false);
     setPenTraceHover(null);
     toast.success(t("toast.penTraceLoaded"));
-  }, [displayWidth, displayHeight, loadDesign, penTraceClosed, penTracePoints, t]);
+  }, [displayWidth, displayHeight, loadDesign, penTraceClosed, penTracePoints, penTraceStyle, t]);
 
   const downloadPenTraceSvg = useCallback(() => {
     if (penTracePoints.length < 2) {
@@ -1655,11 +1794,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         displayHeight,
         widthIn: material.widthIn,
         heightIn: material.heightIn,
+        style: penTraceStyle,
       }),
       "svg",
       "image/svg+xml;charset=utf-8",
     );
-  }, [displayWidth, displayHeight, dlText, material.heightIn, material.widthIn, penTraceClosed, penTracePoints, t]);
+  }, [displayWidth, displayHeight, dlText, material.heightIn, material.widthIn, penTraceClosed, penTracePoints, penTraceStyle, t]);
 
   const savePenTracePreset = useCallback(() => {
     if (penTracePoints.length < 2) {
@@ -1672,7 +1812,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       closed: penTraceClosed,
       width: displayWidth,
       height: displayHeight,
-      strokeWidth: 2,
+      strokeWidth: penTraceStyle.strokeWidth,
+      strokeColor: penTraceStyle.strokeColor,
+      fillEnabled: penTraceStyle.fillEnabled,
+      fillColor: penTraceStyle.fillColor,
     });
 
     addCustomPreset({
@@ -1683,6 +1826,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       maskDataUrl: svgToDataUrl(previewSvg),
       tracePoints: normalizeTracePoints(penTracePoints, displayWidth, displayHeight),
       traceClosed: penTraceClosed,
+      traceStyle: penTraceStyle,
       createdAt: new Date().toISOString(),
       source: "pen-trace",
     });
@@ -1696,6 +1840,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     material.widthIn,
     penTraceClosed,
     penTracePoints,
+    penTraceStyle,
     t,
     tracePresetName,
     tracePresets.length,
@@ -2159,6 +2304,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         loaded: !!partPhoto,
         rotationDeg: partRotation,
       },
+      engraveAi: {
+        outlineReady: penTraceClosed && penTracePoints.length >= 3,
+        tracePoints: penTracePoints.length,
+        designClippedToOutline: clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3,
+      },
       design: design
         ? {
             loaded: true,
@@ -2184,6 +2334,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       material.widthIn,
       partPhoto,
       partRotation,
+      penTraceClosed,
+      penTracePoints.length,
+      clipDesignToTrace,
       screenPpi,
       selectedPresetName,
       showRuler,
@@ -2430,9 +2583,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     {tracePath && (
                       <path
                         d={tracePath}
-                        fill="none"
-                        stroke="rgba(250, 204, 21, 0.95)"
-                        strokeWidth="2"
+                        fill={penTraceStyle.fillEnabled && penTraceClosed ? previewTraceFill(penTraceStyle.fillColor) : "none"}
+                        stroke={penTraceStyle.strokeColor}
+                        strokeWidth={penTraceStyle.strokeWidth}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeDasharray={penTraceClosed ? undefined : "8 5"}
@@ -2444,32 +2597,38 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         d={previewPath}
                         fill="none"
                         stroke="rgba(255, 255, 255, 0.75)"
-                        strokeWidth="1.5"
+                        strokeWidth={Math.max(1, penTraceStyle.strokeWidth * 0.75)}
                         strokeLinecap="round"
                         strokeLinejoin="round"
                         strokeDasharray="4 5"
                         vectorEffect="non-scaling-stroke"
                       />
                     )}
-                    {penTracePoints.map((point, index) => (
-                      <circle
-                        key={`${index}-${point.x}-${point.y}`}
-                        cx={point.x}
-                        cy={point.y}
-                        r={index === 0 ? 5 : 4}
-                        fill={index === 0 ? "#22c55e" : "#facc15"}
-                        stroke="#111827"
-                        strokeWidth="2"
-                        style={{
-                          cursor: penTraceActive ? "move" : "default",
-                          pointerEvents: penTraceActive ? "auto" : "none",
-                        }}
-                        onMouseDown={(e) => handlePenTracePointMouseDown(e, index)}
-                      />
-                    ))}
                   </svg>
                 );
               })()}
+
+              {penTracePoints.length > 0 && penTracePoints.map((point, index) => {
+                const handleSize = index === 0 ? 14 : 12;
+                return (
+                  <button
+                    key={`trace-handle-${index}-${point.x}-${point.y}`}
+                    type="button"
+                    aria-label={`Trace point ${index + 1}`}
+                    data-engraving-trace-point={index}
+                    className="absolute z-[60] box-border rounded-full border-2 border-slate-950 p-0 shadow-[0_0_0_1px_rgba(255,255,255,0.75),0_2px_8px_rgba(0,0,0,0.55)]"
+                    style={{
+                      left: point.x - handleSize / 2,
+                      top: point.y - handleSize / 2,
+                      width: handleSize,
+                      height: handleSize,
+                      backgroundColor: index === 0 ? "#22c55e" : "#facc15",
+                      cursor: "move",
+                    }}
+                    onMouseDown={(e) => handlePenTracePointMouseDown(e, index)}
+                  />
+                );
+              })}
 
               {/* Design bounding-box resize handles (normal mode) */}
               {design && !eraserActive && !warpMode && !penTraceActive && (() => {
@@ -2477,7 +2636,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 const imgH = design.naturalHeight * design.scale * design.scaleY;
                 const cx = design.x + imgW / 2;
                 const cy = design.y + imgH / 2;
-                const HW = 8;
+                const HW = 12;
 
                 const handles: { id: "n"|"s"|"e"|"w"|"nw"|"ne"|"sw"|"se"; left: number; top: number; cursor: string }[] = [
                   { id: "nw", left: design.x - HW/2,         top: design.y - HW/2,         cursor: "nwse-resize" },
@@ -2494,7 +2653,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   <>
                     {/* Dashed border */}
                     <div
-                      className="absolute pointer-events-none"
+                      className="absolute z-40 pointer-events-none"
                       style={{
                         left: design.x, top: design.y,
                         width: imgW, height: imgH,
@@ -2505,7 +2664,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     {handles.map((h) => (
                       <div
                         key={h.id}
-                        className="absolute z-20 bg-white border-2 border-primary rounded-sm"
+                        data-engraving-design-handle={h.id}
+                        className="absolute z-50 box-border rounded-full border-2 border-primary bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.8),0_2px_8px_rgba(0,0,0,0.45)]"
                         style={{
                           left: h.left, top: h.top,
                           width: HW, height: HW,
@@ -2885,6 +3045,86 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       {t("panel.penTrace.downloadSvg")}
                     </Button>
                   </div>
+                  <div className="space-y-2 rounded-md border border-border/60 bg-background/50 p-2">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
+                        {t("panel.penTrace.style")}
+                      </span>
+                      <div className="flex items-center gap-2">
+                        <Label className="text-[10px] text-muted-foreground">
+                          {t("panel.penTrace.strokeColor")}
+                        </Label>
+                        <input
+                          type="color"
+                          value={penTraceStyle.strokeColor}
+                          onChange={(event) =>
+                            setPenTraceStyle((style) => ({ ...style, strokeColor: event.target.value }))
+                          }
+                          className="h-6 w-9 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                          aria-label={t("panel.penTrace.strokeColor")}
+                        />
+                      </div>
+                    </div>
+                    <div className="space-y-1.5">
+                      <div className="flex items-center justify-between">
+                        <Label className="text-[10px] text-muted-foreground">
+                          {t("panel.penTrace.lineWidth")}
+                        </Label>
+                        <span className="text-[10px] font-mono">{penTraceStyle.strokeWidth}px</span>
+                      </div>
+                      <Slider
+                        value={[penTraceStyle.strokeWidth]}
+                        min={0.5}
+                        max={10}
+                        step={0.5}
+                        onValueChange={([value]) =>
+                          setPenTraceStyle((style) => ({ ...style, strokeWidth: value }))
+                        }
+                      />
+                    </div>
+                    <div className="flex items-center justify-between gap-2">
+                      <Label className="text-[10px] text-muted-foreground" htmlFor="pen-trace-fill">
+                        {t("panel.penTrace.fillClosed")}
+                      </Label>
+                      <Switch
+                        id="pen-trace-fill"
+                        size="sm"
+                        checked={penTraceStyle.fillEnabled}
+                        onCheckedChange={(checked) =>
+                          setPenTraceStyle((style) => ({ ...style, fillEnabled: checked }))
+                        }
+                      />
+                    </div>
+                    {penTraceStyle.fillEnabled && (
+                      <div className="flex items-center justify-between gap-2">
+                        <Label className="text-[10px] text-muted-foreground">
+                          {t("panel.penTrace.fillColor")}
+                        </Label>
+                        <input
+                          type="color"
+                          value={penTraceStyle.fillColor}
+                          onChange={(event) =>
+                            setPenTraceStyle((style) => ({ ...style, fillColor: event.target.value }))
+                          }
+                          className="h-6 w-9 cursor-pointer rounded border border-border bg-transparent p-0.5"
+                          aria-label={t("panel.penTrace.fillColor")}
+                        />
+                      </div>
+                    )}
+                  </div>
+                  {design && penTraceClosed && penTracePoints.length >= 3 && (
+                    <div className="flex items-center justify-between gap-2 rounded-md border border-border/60 bg-background/50 px-2 py-2">
+                      <Label className="text-[10px] text-muted-foreground" htmlFor="pen-trace-clip">
+                        {t("panel.penTrace.clipDesign")}
+                      </Label>
+                      <Switch
+                        id="pen-trace-clip"
+                        size="sm"
+                        checked={clipDesignToTrace}
+                        onCheckedChange={setClipDesignToTrace}
+                      />
+                    </div>
+                  )}
                   <div className="space-y-1.5">
                     <Input
                       value={tracePresetName}
@@ -2990,6 +3230,19 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
               )}
               <p className="text-[10px] text-muted-foreground opacity-60">{t("panel.partPhoto.helper")}</p>
             </div>
+
+            <EngraveAiPanel
+              partPhoto={partPhoto}
+              partRotation={partRotation}
+              displayWidth={displayWidth}
+              displayHeight={displayHeight}
+              locale={locale}
+              hasDesign={!!design}
+              clipDesignToTrace={clipDesignToTrace}
+              onClipDesignChange={setClipDesignToTrace}
+              onUseTrace={applyDetectedTrace}
+              onApplyFilledMask={applyDetectedMaskAsDesign}
+            />
 
             {/* Step 3: Design */}
             <div className="rounded-lg border border-border bg-card p-4 space-y-3">

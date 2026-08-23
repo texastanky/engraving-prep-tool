@@ -37,6 +37,7 @@ function summarizeContext(context) {
   const material = context?.material ?? {};
   const canvas = context?.canvas ?? {};
   const partPhoto = context?.partPhoto ?? {};
+  const engraveAi = context?.engraveAi ?? {};
   const design = context?.design ?? null;
 
   return {
@@ -57,6 +58,11 @@ function summarizeContext(context) {
     partPhoto: {
       loaded: Boolean(partPhoto.loaded),
       rotationDeg: Number(partPhoto.rotationDeg) || 0,
+    },
+    engraveAi: {
+      outlineReady: Boolean(engraveAi.outlineReady),
+      tracePoints: Number(engraveAi.tracePoints) || 0,
+      designClippedToOutline: Boolean(engraveAi.designClippedToOutline),
     },
     design: design
       ? {
@@ -84,6 +90,8 @@ function systemPrompt(locale) {
     "You are the in-app Engraving Assistant for a laser engraving layout tool.",
     "Help users prepare artwork, size designs, choose export formats, and think through laser setup for stainless steel, anodized aluminum, coated metal, polymer, wood, acrylic, and firearm parts.",
     "Use the provided canvas context when it helps. Do not claim to inspect uploaded images; you only receive text state.",
+    "When the user asks about outline detection, laser-safe areas, or filling art inside a part, explain the Engrave AI flow: crop/rotate part photo, detect outline, tune tolerance/safety inset/points, use Trace + Clip Art, fill the artwork, then export.",
+    "For advertising copy around firearm engraving, focus on customization, engraving, personalization, restoration, and business contact information. Do not frame the business as selling firearms unless the user explicitly asks and provides compliant wording.",
     "For settings, give cautious starting guidance and recommend test grids on scrap because machines, lenses, coatings, and materials vary.",
     "For NFA, ATF, serial number, or other compliance questions, give general orientation only and tell the user to verify current official requirements before engraving.",
     "Do not help evade laws, remove or alter required identifying marks, or present legal guidance as definitive.",

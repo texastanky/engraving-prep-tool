@@ -8,6 +8,13 @@ export type CustomPresetPoint = {
   y: number;
 };
 
+export type CustomPresetTraceStyle = {
+  strokeColor?: string;
+  strokeWidth?: number;
+  fillEnabled?: boolean;
+  fillColor?: string;
+};
+
 export type CustomPreset = {
   id: string;
   name: string;
@@ -17,6 +24,7 @@ export type CustomPreset = {
   maskDataUrl: string; // image data URL of the traced outline preview
   tracePoints?: CustomPresetPoint[];
   traceClosed?: boolean;
+  traceStyle?: CustomPresetTraceStyle;
   createdAt?: string;
   source?: "pen-trace" | "outline-tracer";
 };

@@ -182,7 +182,7 @@ function createWindow(startUrl) {
     },
   });
 
-  window.loadURL(`${startUrl}/canvas#xtool-settings`);
+  window.loadURL(`${startUrl}/canvas?desktop=1#xtool-settings`);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);

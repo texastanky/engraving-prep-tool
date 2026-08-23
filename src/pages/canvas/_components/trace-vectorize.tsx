@@ -213,7 +213,8 @@ function buildSvg(
   svgW: number,
   svgH: number,
   strokeColor: string,
-  fillMode: "filled" | "stroke"
+  fillMode: "filled" | "stroke",
+  strokeWidth: number
 ): string {
   const paths = contours.map((pts) => {
     if (pts.length < 2) return "";
@@ -225,9 +226,35 @@ function buildSvg(
   const strokeAttr = fillMode === "stroke" ? strokeColor : "none";
 
   return `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">
-  <g fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="1" fill-rule="evenodd">
+  <g fill="${fillAttr}" stroke="${strokeAttr}" stroke-width="${strokeWidth}" stroke-linecap="round" stroke-linejoin="round" fill-rule="evenodd">
   ${paths}
   </g>
+</svg>`;
+}
+
+function buildFilledMaskSvg(
+  binary: Uint8Array,
+  svgW: number,
+  svgH: number,
+  fillColor: string
+): string {
+  const rectPaths: string[] = [];
+
+  for (let y = 0; y < svgH; y++) {
+    let x = 0;
+    while (x < svgW) {
+      while (x < svgW && binary[y * svgW + x] === 0) x++;
+      const startX = x;
+      while (x < svgW && binary[y * svgW + x] === 1) x++;
+      const runWidth = x - startX;
+      if (runWidth > 0) {
+        rectPaths.push(`M${startX} ${y}h${runWidth}v1h-${runWidth}Z`);
+      }
+    }
+  }
+
+  return `<svg xmlns="http://www.w3.org/2000/svg" width="${svgW}" height="${svgH}" viewBox="0 0 ${svgW} ${svgH}">
+  <path d="${rectPaths.join(" ")}" fill="${fillColor}" stroke="none" />
 </svg>`;
 }
 
@@ -459,7 +486,8 @@ function OutlineTab({
   const [simplify, setSimplify] = useState(2);
   const [invert, setInvert] = useState(false);
   const [fillMode, setFillMode] = useState<"filled" | "stroke">("filled");
-  const [outputColor, setOutputColor] = useState<"black" | "white">("black");
+  const [outputColor, setOutputColor] = useState("#000000");
+  const [lineWeight, setLineWeight] = useState(1);
   const svgRef = useRef<string>("");
 
   const render = useCallback(() => {
@@ -493,14 +521,17 @@ function OutlineTab({
     // Filter tiny noise
     contours = contours.filter(p => p.length >= 6);
 
-    // Build SVG
-    const color = outputColor === "black" ? "#000000" : "#ffffff";
-    const svg = buildSvg(contours, displayWidth, displayHeight, color, fillMode);
+    // Build SVG. Filled output uses the binary mask so closed areas actually fill;
+    // stroke output uses contours for editable linework.
+    const svg =
+      fillMode === "filled"
+        ? buildFilledMaskSvg(binary, displayWidth, displayHeight, outputColor)
+        : buildSvg(contours, displayWidth, displayHeight, outputColor, fillMode, lineWeight);
     svgRef.current = svg;
 
     // Render preview on canvas
     const ctx = c.getContext("2d")!;
-    ctx.fillStyle = outputColor === "black" ? "#ffffff" : "#000000";
+    ctx.fillStyle = outputColor.toLowerCase() === "#ffffff" ? "#000000" : "#ffffff";
     ctx.fillRect(0, 0, displayWidth, displayHeight);
 
     const blob = new Blob([svg], { type: "image/svg+xml" });
@@ -511,7 +542,7 @@ function OutlineTab({
       URL.revokeObjectURL(url);
     };
     svgImg.src = url;
-  }, [img, displayWidth, displayHeight, threshold, simplify, invert, fillMode, outputColor]);
+  }, [img, displayWidth, displayHeight, threshold, simplify, invert, fillMode, outputColor, lineWeight]);
 
   useEffect(() => { render(); }, [render]);
 
@@ -546,7 +577,7 @@ function OutlineTab({
       </div>
 
       {/* Preview */}
-      <div className="rounded-lg overflow-hidden border border-border" style={{ maxHeight: 220, background: outputColor === "black" ? "#fff" : "#000" }}>
+      <div className="rounded-lg overflow-hidden border border-border" style={{ maxHeight: 220, background: outputColor.toLowerCase() === "#ffffff" ? "#000" : "#fff" }}>
         <canvas
           ref={canvasRef}
           style={{ width: "100%", height: "auto", display: "block" }}
@@ -586,13 +617,26 @@ function OutlineTab({
       </div>
 
       {/* Output color */}
-      <div className="flex items-center justify-between">
+      <div className="flex items-center justify-between gap-3">
         <Label className="text-xs text-muted-foreground">Output Color</Label>
-        <div className="flex rounded border border-border overflow-hidden text-[10px]">
-          <button className={`px-2.5 py-1 cursor-pointer transition-colors ${outputColor === "black" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setOutputColor("black")}>Black</button>
-          <button className={`px-2.5 py-1 cursor-pointer transition-colors ${outputColor === "white" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`} onClick={() => setOutputColor("white")}>White</button>
-        </div>
+        <input
+          type="color"
+          value={outputColor}
+          onChange={(event) => setOutputColor(event.target.value)}
+          className="h-7 w-10 cursor-pointer rounded border border-border bg-transparent p-0.5"
+          aria-label="Trace output color"
+        />
       </div>
+
+      {fillMode === "stroke" && (
+        <div className="space-y-2">
+          <div className="flex items-center justify-between">
+            <Label className="text-xs text-muted-foreground">Line Weight</Label>
+            <span className="text-xs font-mono">{lineWeight}px</span>
+          </div>
+          <Slider value={[lineWeight]} min={0.5} max={8} step={0.5} onValueChange={([v]) => setLineWeight(v)} />
+        </div>
+      )}
 
       {/* Invert */}
       <div className="flex items-center justify-between">
