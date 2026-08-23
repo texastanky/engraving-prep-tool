@@ -2044,11 +2044,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   );
 
   // --- Design bounding-box drag-to-resize ---
-  const handleDesignResizeMouseDown = useCallback(
-    (e: React.MouseEvent, handle: "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se") => {
+  const handleDesignResizePointerDown = useCallback(
+    (e: React.PointerEvent, handle: DesignResizeHandle) => {
       if (!design) return;
       e.stopPropagation();
       e.preventDefault();
+      e.currentTarget.setPointerCapture?.(e.pointerId);
       const imgW = design.naturalWidth * design.scale * design.scaleX;
       const imgH = design.naturalHeight * design.scale * design.scaleY;
       designResizeDragRef.current = {
@@ -2064,7 +2065,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         shiftKey: e.shiftKey,
       };
 
-      const onMove = (ev: MouseEvent) => {
+      const onMove = (ev: PointerEvent) => {
         const drag = designResizeDragRef.current;
         if (!drag || !design) return;
         const dx = ev.clientX - drag.startMouseX;
@@ -2114,12 +2115,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const onUp = () => {
         commitCurrentDesign();
         designResizeDragRef.current = null;
-        window.removeEventListener("mousemove", onMove);
-        window.removeEventListener("mouseup", onUp);
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
       };
 
-      window.addEventListener("mousemove", onMove);
-      window.addEventListener("mouseup", onUp);
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
     },
     [design, updateDesignContinuously, commitCurrentDesign]
   );
@@ -2659,22 +2662,43 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
               })}
 
               {/* Design bounding-box resize handles (normal mode) */}
-              {design && !eraserActive && !warpMode && !penTraceActive && (() => {
+              {design && !warpMode && !penTraceActive && (() => {
                 const imgW = design.naturalWidth * design.scale * design.scaleX;
                 const imgH = design.naturalHeight * design.scale * design.scaleY;
                 const cx = design.x + imgW / 2;
                 const cy = design.y + imgH / 2;
-                const HW = 12;
+                const HW = 16;
+                const halfHandle = HW / 2;
+                const rotation = (design.rotation * Math.PI) / 180;
+                const cos = Math.cos(rotation);
+                const sin = Math.sin(rotation);
+                const clampHandleCenter = (value: number, max: number) =>
+                  Math.min(Math.max(value, halfHandle), max - halfHandle);
+                const rotatePoint = (x: number, y: number) => {
+                  const dx = x - cx;
+                  const dy = y - cy;
+                  return {
+                    x: cx + dx * cos - dy * sin,
+                    y: cy + dx * sin + dy * cos,
+                  };
+                };
+                const handlePoint = (x: number, y: number) => {
+                  const point = rotatePoint(x, y);
+                  return {
+                    left: clampHandleCenter(point.x, displayWidth) - halfHandle,
+                    top: clampHandleCenter(point.y, displayHeight) - halfHandle,
+                  };
+                };
 
                 const handles: { id: "n"|"s"|"e"|"w"|"nw"|"ne"|"sw"|"se"; left: number; top: number; cursor: string }[] = [
-                  { id: "nw", left: design.x - HW/2,         top: design.y - HW/2,         cursor: "nwse-resize" },
-                  { id: "n",  left: cx - HW/2,               top: design.y - HW/2,         cursor: "ns-resize" },
-                  { id: "ne", left: design.x + imgW - HW/2,  top: design.y - HW/2,         cursor: "nesw-resize" },
-                  { id: "e",  left: design.x + imgW - HW/2,  top: cy - HW/2,               cursor: "ew-resize" },
-                  { id: "se", left: design.x + imgW - HW/2,  top: design.y + imgH - HW/2,  cursor: "nwse-resize" },
-                  { id: "s",  left: cx - HW/2,               top: design.y + imgH - HW/2,  cursor: "ns-resize" },
-                  { id: "sw", left: design.x - HW/2,         top: design.y + imgH - HW/2,  cursor: "nesw-resize" },
-                  { id: "w",  left: design.x - HW/2,         top: cy - HW/2,               cursor: "ew-resize" },
+                  { id: "nw", ...handlePoint(design.x,        design.y),        cursor: "nwse-resize" },
+                  { id: "n",  ...handlePoint(cx,              design.y),        cursor: "ns-resize" },
+                  { id: "ne", ...handlePoint(design.x + imgW, design.y),        cursor: "nesw-resize" },
+                  { id: "e",  ...handlePoint(design.x + imgW, cy),              cursor: "ew-resize" },
+                  { id: "se", ...handlePoint(design.x + imgW, design.y + imgH), cursor: "nwse-resize" },
+                  { id: "s",  ...handlePoint(cx,              design.y + imgH), cursor: "ns-resize" },
+                  { id: "sw", ...handlePoint(design.x,        design.y + imgH), cursor: "nesw-resize" },
+                  { id: "w",  ...handlePoint(design.x,        cy),              cursor: "ew-resize" },
                 ];
 
                 return (
@@ -2685,21 +2709,26 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       style={{
                         left: design.x, top: design.y,
                         width: imgW, height: imgH,
-                        border: "1.5px dashed rgba(200,160,60,0.7)",
+                        border: "2px dashed rgba(249,115,22,0.95)",
                         boxSizing: "border-box",
+                        boxShadow: "inset 0 0 0 1px rgba(15,23,42,0.9), 0 0 0 1px rgba(255,255,255,0.65)",
+                        transform: `rotate(${design.rotation}deg)`,
+                        transformOrigin: "center",
                       }}
                     />
                     {handles.map((h) => (
                       <div
                         key={h.id}
                         data-engraving-design-handle={h.id}
-                        className="absolute z-50 box-border rounded-full border-2 border-primary bg-white shadow-[0_0_0_1px_rgba(0,0,0,0.8),0_2px_8px_rgba(0,0,0,0.45)]"
+                        aria-label={`Resize design ${h.id}`}
+                        className="absolute z-[70] box-border rounded-full border-[3px] border-orange-500 bg-white shadow-[0_0_0_2px_rgba(15,23,42,0.9),0_0_0_4px_rgba(255,255,255,0.65),0_3px_10px_rgba(0,0,0,0.55)]"
                         style={{
                           left: h.left, top: h.top,
                           width: HW, height: HW,
                           cursor: h.cursor,
+                          touchAction: "none",
                         }}
-                        onMouseDown={(e) => handleDesignResizeMouseDown(e, h.id)}
+                        onPointerDown={(e) => handleDesignResizePointerDown(e, h.id)}
                       />
                     ))}
                     <div className="absolute bottom-2 right-2 pointer-events-none">

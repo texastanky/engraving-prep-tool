@@ -1,6 +1,6 @@
 {
-  "latestVersion": "0.1.2",
+  "latestVersion": "0.1.3",
   "installerUrl": "https://github.com/texastanky/engraving-prep-tool-downloads/releases/latest/download/Engraving-Prep-Tool-Setup.exe",
   "releaseDate": "2026-08-23",
-  "releaseNotes": "Fixes design/art image loading retries and adds clear upload error messages, plus AI vision support for design and material analysis."
+  "releaseNotes": "Makes the design editing dots larger, rotation-aware, touch-friendly, and visible when editing loaded art."
 }
