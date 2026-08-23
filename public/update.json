@@ -1,6 +1,6 @@
 {
   "latestVersion": "0.1.0",
-  "installerUrl": "https://github.com/texastanky/engraving-prep-tool/releases/latest/download/Engraving-Prep-Tool-Setup.exe",
+  "installerUrl": "https://github.com/texastanky/engraving-prep-tool-downloads/releases/latest/download/Engraving-Prep-Tool-Setup.exe",
   "releaseDate": "2026-08-23",
   "releaseNotes": "Adds Engrave AI improvements, adjustable trace handles, and standalone update notifications."
 }
