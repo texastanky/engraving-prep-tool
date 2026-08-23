@@ -1,6 +1,6 @@
 {
-  "latestVersion": "0.1.1",
+  "latestVersion": "0.1.2",
   "installerUrl": "https://github.com/texastanky/engraving-prep-tool-downloads/releases/latest/download/Engraving-Prep-Tool-Setup.exe",
   "releaseDate": "2026-08-23",
-  "releaseNotes": "Adds AI vision support for analyzing loaded designs and material photos, plus Engrave AI improvements and standalone update notifications."
+  "releaseNotes": "Fixes design/art image loading retries and adds clear upload error messages, plus AI vision support for design and material analysis."
 }

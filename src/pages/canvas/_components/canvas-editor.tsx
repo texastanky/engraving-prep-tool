@@ -1102,10 +1102,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const loadPartPhoto = useCallback((src: string) => {
     const img = new Image();
     img.crossOrigin = "anonymous";
-    img.onload = () => setPartPhoto(img);
+    img.onload = () => {
+      setPartPhoto(img);
+      setPartPhotoSrc(src);
+    };
+    img.onerror = () => toast.error(t("toast.partPhotoLoadFail"));
     img.src = src;
-    setPartPhotoSrc(src);
-  }, []);
+  }, [t]);
 
   const loadDesign = useCallback(
     (src: string, restoreState?: SavedDesignState) => {
@@ -1160,6 +1163,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             setDesignHeightInput(inToMm(heightIn).toFixed(1));
           }
         };
+        img.onerror = () => toast.error(t("toast.designLoadFail"));
         img.src = imgSrc;
       };
 
@@ -1169,16 +1173,19 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       } else {
         // Remote URL (template CDN or bundled asset) — preserve the file's real image type.
         fetch(src)
-          .then((r) => r.blob())
+          .then((r) => {
+            if (!r.ok) throw new Error("Unable to load design image");
+            return r.blob();
+          })
           .then((blob) => {
             const objectUrl = URL.createObjectURL(blob);
             applyImg(objectUrl);
           })
-          .catch(() => {});
+          .catch(() => toast.error(t("toast.designLoadFail")));
       }
       setDesignSrc(src);
     },
-    [displayWidth, displayHeight, material, unit]
+    [displayWidth, displayHeight, material, t, unit]
   );
 
   // Restore design from saved src on mount (after loadDesign is defined)
@@ -1191,28 +1198,42 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadDesign]);
 
-  const readFile = (file: File, onLoad: (src: string) => void) => {
+  const readFile = useCallback((file: File, onLoad: (src: string) => void) => {
     const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
-    if (!file.type.startsWith("image/") && !isSvg) return;
+    const hasKnownImageExtension = /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
+    if (!file.type.startsWith("image/") && !isSvg && !hasKnownImageExtension) {
+      toast.error(t("toast.imageUnsupported"));
+      return;
+    }
     const reader = new FileReader();
-    reader.onload = (ev) => onLoad(ev.target?.result as string);
+    reader.onload = (ev) => {
+      const src = String(ev.target?.result ?? "");
+      if (!src) {
+        toast.error(t("toast.imageReadFail"));
+        return;
+      }
+      onLoad(src);
+    };
+    reader.onerror = () => toast.error(t("toast.imageReadFail"));
     reader.readAsDataURL(file);
-  };
+  }, [t]);
 
   const handlePartUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) readFile(file, loadPartPhoto);
+      e.currentTarget.value = "";
     },
-    [loadPartPhoto]
+    [loadPartPhoto, readFile]
   );
 
   const handleDesignUpload = useCallback(
     (e: React.ChangeEvent<HTMLInputElement>) => {
       const file = e.target.files?.[0];
       if (file) readFile(file, loadDesign);
+      e.currentTarget.value = "";
     },
-    [loadDesign]
+    [loadDesign, readFile]
   );
 
   const handleDrop = useCallback(
@@ -1227,7 +1248,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         readFile(file, loadDesign);
       }
     },
-    [partPhoto, loadPartPhoto, loadDesign]
+    [partPhoto, loadPartPhoto, loadDesign, readFile]
   );
 
   // --- Material preset ---
@@ -2948,7 +2969,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   {t("panel.partPhoto")} <span className="normal-case font-normal">{t("common.optional")}</span>
                 </Label>
               </div>
-              <input ref={partInputRef} type="file" accept="image/*" onChange={handlePartUpload} className="hidden" />
+              <input ref={partInputRef} type="file" accept="image/*,.svg" onChange={handlePartUpload} className="hidden" />
               <Button
                 variant={partPhoto ? "ghost" : "secondary"}
                 className="w-full"
@@ -3268,7 +3289,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <span className="flex items-center justify-center w-5 h-5 rounded-full bg-primary text-primary-foreground text-xs font-bold shrink-0">3</span>
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">{t("panel.design.heading")}</Label>
               </div>
-              <input ref={designInputRef} type="file" accept="image/*" onChange={handleDesignUpload} className="hidden" />
+              <input ref={designInputRef} type="file" accept="image/*,.svg" onChange={handleDesignUpload} className="hidden" />
               <Button
                 variant={design ? "ghost" : "secondary"}
                 className="w-full"
