@@ -23,6 +23,8 @@ const ERROR_MESSAGES: Record<string, string> = {
   auth_unavailable: "Account service is unavailable right now.",
 };
 
+const LOGIN_DISABLED_TEMPORARILY = true;
+
 async function authRequest(payload?: Record<string, unknown>) {
   const response = await fetch("/api/auth", {
     method: payload ? "POST" : "GET",
@@ -40,6 +42,14 @@ async function authRequest(payload?: Record<string, unknown>) {
 }
 
 export function AccountGate({ children }: { children: ReactNode }) {
+  if (LOGIN_DISABLED_TEMPORARILY) {
+    return <>{children}</>;
+  }
+
+  return <AuthenticatedAccountGate>{children}</AuthenticatedAccountGate>;
+}
+
+function AuthenticatedAccountGate({ children }: { children: ReactNode }) {
   const [auth, setAuth] = useState<AuthState>({ status: "loading", user: null });
   const [mode, setMode] = useState<"login" | "register">("login");
   const [name, setName] = useState("");
