@@ -18,12 +18,14 @@ const ERROR_MESSAGES: Record<string, string> = {
   invalid_email: "Use a valid email address.",
   weak_password: "Password needs to be at least 8 characters.",
   bad_signup_code: "That access code did not match.",
+  registration_disabled: "New accounts are disabled right now. Sign in with the owner account.",
   account_exists: "That email already has an account. Sign in instead.",
   bad_credentials: "Email or password did not match.",
   auth_unavailable: "Account service is unavailable right now.",
 };
 
-const LOGIN_DISABLED_TEMPORARILY = true;
+const LOGIN_DISABLED_TEMPORARILY = false;
+const REGISTRATION_DISABLED = import.meta.env.VITE_AUTH_REGISTRATION_DISABLED === "true";
 
 async function authRequest(payload?: Record<string, unknown>) {
   const response = await fetch("/api/auth", {
@@ -83,7 +85,7 @@ function AuthenticatedAccountGate({ children }: { children: ReactNode }) {
 
     try {
       const result = await authRequest({
-        action: mode,
+        action: REGISTRATION_DISABLED ? "login" : mode,
         name,
         email,
         password,
@@ -156,7 +158,7 @@ function AuthenticatedAccountGate({ children }: { children: ReactNode }) {
             </div>
           </div>
 
-          <div className="mb-4 grid grid-cols-2 rounded-md border border-border p-1 text-sm">
+          <div className={`mb-4 grid rounded-md border border-border p-1 text-sm ${REGISTRATION_DISABLED ? "grid-cols-1" : "grid-cols-2"}`}>
             <button
               className={`rounded px-3 py-1.5 font-medium ${mode === "login" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
               type="button"
@@ -167,16 +169,18 @@ function AuthenticatedAccountGate({ children }: { children: ReactNode }) {
             >
               Sign in
             </button>
-            <button
-              className={`rounded px-3 py-1.5 font-medium ${mode === "register" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
-              type="button"
-              onClick={() => {
-                setMode("register");
-                setError("");
-              }}
-            >
-              Free account
-            </button>
+            {!REGISTRATION_DISABLED && (
+              <button
+                className={`rounded px-3 py-1.5 font-medium ${mode === "register" ? "bg-primary text-primary-foreground" : "text-muted-foreground"}`}
+                type="button"
+                onClick={() => {
+                  setMode("register");
+                  setError("");
+                }}
+              >
+                Free account
+              </button>
+            )}
           </div>
 
           {mode === "register" && (

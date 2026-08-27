@@ -79,6 +79,21 @@ function publicUser(user) {
   };
 }
 
+function staticAdminUser() {
+  const email = normalizeEmail(process.env.AUTH_ADMIN_EMAIL);
+  const password = process.env.AUTH_ADMIN_PASSWORD || "";
+  if (!email || !password) return null;
+
+  return {
+    id: "env-admin",
+    email,
+    name: String(process.env.AUTH_ADMIN_NAME || "Admin").trim() || "Admin",
+    password,
+    createdAt: "env",
+    updatedAt: "env",
+  };
+}
+
 async function readUsers() {
   try {
     const raw = await fs.readFile(USER_FILE, "utf8");
@@ -174,6 +189,10 @@ export function clearSessionCookie(res) {
 }
 
 export async function registerAccount({ email, name, password, signupCode }) {
+  if (process.env.AUTH_DISABLE_REGISTRATION === "true") {
+    return { ok: false, status: 403, error: "registration_disabled" };
+  }
+
   const normalizedEmail = normalizeEmail(email);
   const displayName = String(name || "").trim().slice(0, 80);
   const requiredSignupCode = process.env.AUTH_SIGNUP_CODE?.trim();
@@ -213,6 +232,15 @@ export async function registerAccount({ email, name, password, signupCode }) {
 
 export async function loginAccount({ email, password }) {
   const normalizedEmail = normalizeEmail(email);
+  const adminUser = staticAdminUser();
+  if (
+    adminUser &&
+    normalizedEmail === adminUser.email &&
+    timingSafeEqual(String(password || ""), adminUser.password)
+  ) {
+    return { ok: true, user: publicUser(adminUser) };
+  }
+
   const users = await readUsers();
   const user = users.find((candidate) => candidate.email === normalizedEmail);
 
