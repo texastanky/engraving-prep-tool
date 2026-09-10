@@ -20,6 +20,8 @@ export default defineConfig({
         test: {
           name: "frontend",
           environment: "jsdom",
+          // Full dialog interactions can exceed five seconds on Windows laptops.
+          testTimeout: 15000,
           include: ["src/**/*.test.{ts,tsx}"],
           setupFiles: ["./src/vitest.setup.ts"],
         },

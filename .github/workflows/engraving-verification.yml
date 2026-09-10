@@ -3,6 +3,7 @@ on:
   push:
     branches:
       - codex/test-engraving-20260909
+      - codex/fix-desktop-persistence
 permissions:
   contents: read
 jobs:
@@ -81,7 +82,24 @@ jobs:
           const pageErrors = [];
           const presetKey = 'pgs-xtool-converter-saved-presets-v1';
           const credentials = { email: 'engraving-test@example.test', password: 'Temporary-test-password-2026' };
-          let app, page, firstOrigin, savedPreset;
+          let app, page, firstOrigin, savedPreset, dataDirectory, savedTrace;
+          const traceKey = 'laser-canvas-custom-presets';
+          const traceName = 'Windows restart test plate';
+          async function readSetting(key) {
+            return page.evaluate(key => window.engravingStorage.getItem(key), key);
+          }
+          async function failDiskWrites(fn) {
+            const settingsPath = path.join(dataDirectory, 'engraving-settings.json');
+            const before = await fs.readFile(settingsPath, 'utf8');
+            const blocked = settingsPath + '.tmp';
+            await fs.mkdir(blocked);
+            try {
+              await fn();
+              assert.equal(await fs.readFile(settingsPath, 'utf8'), before, 'A failed save changed the existing file');
+            } finally {
+              await fs.rmdir(blocked);
+            }
+          }
           async function check(name, fn) {
             try {
               const detail = await fn();
@@ -105,6 +123,7 @@ jobs:
               timeout: 60000,
             });
             page = await app.firstWindow();
+            dataDirectory = await app.evaluate(({ app }) => app.getPath('userData'));
             page.setDefaultTimeout(15000);
             page.on('pageerror', error => pageErrors.push(error.message));
             await page.getByRole('heading', { name: 'Engraving Prep Tool', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
@@ -213,7 +232,7 @@ jobs:
                 });
                 await check('PNG export has correct dimensions and 300 DPI', async () => {
                   const bytes = await exportFile('PNG (transparent)', 'png');
-                  const state = await page.evaluate(() => JSON.parse(localStorage.getItem('pgs-canvas-editor-v1')));
+                  const state = JSON.parse(await readSetting('pgs-canvas-editor-v1'));
                   assert.equal(bytes.subarray(1, 4).toString(), 'PNG');
                   assert.equal(bytes.readUInt32BE(16), Math.round(state.material.widthIn * 300));
                   assert.equal(bytes.readUInt32BE(20), Math.round(state.material.heightIn * 300));
@@ -244,23 +263,76 @@ jobs:
                 });
                 await page.screenshot({ path: path.join(out, 'editor.png') });
               }
+              await check('Desktop storage bridge rejects unsupported keys', async () => {
+                const denied = await page.evaluate(() => {
+                  try { window.engravingStorage.setItem('../../auth-users.json', 'bad'); return false; }
+                  catch { return true; }
+                });
+                assert.ok(denied);
+              });
+              const traced = await check('Save a traced part through the UI', async () => {
+                const choosing = page.waitForEvent('filechooser');
+                await page.getByRole('button', { name: 'Upload Part Photo', exact: true }).click();
+                await (await choosing).setFiles({
+                  name: 'part.svg', mimeType: 'image/svg+xml',
+                  buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="silver"/></svg>'),
+                });
+                await page.getByRole('button', { name: 'Trace', exact: true }).click();
+                const drawing = page.locator('canvas[style*="crosshair"]');
+                await drawing.scrollIntoViewIfNeeded();
+                const box = await drawing.boundingBox();
+                assert.ok(box);
+                for (const [x, y] of [[0.2, 0.2], [0.65, 0.2], [0.65, 0.7]]) {
+                  await drawing.click({ position: { x: box.width * x, y: box.height * y } });
+                }
+                await expect(page.locator('[data-engraving-trace-point]')).toHaveCount(3);
+                await page.getByLabel('Traced part name', { exact: true }).fill(traceName);
+                await page.getByRole('button', { name: 'Save traced part', exact: true }).click();
+                await expect(page.getByRole('button', { name: new RegExp('^' + traceName) })).toBeVisible();
+                savedTrace = JSON.parse(await readSetting(traceKey));
+                assert.equal(savedTrace[0].name, traceName);
+              });
+              if (traced) await check('Failed trace saves and deletions show errors and preserve existing presets', async () => {
+                await failDiskWrites(async () => {
+                  await page.getByLabel('Traced part name', { exact: true }).fill('This save must fail');
+                  await page.getByRole('button', { name: 'Save traced part', exact: true }).click();
+                  await expect(page.getByText('Could not save part presets. Try again or export your trace.', { exact: true })).toBeVisible();
+                  await expect(page.getByLabel('Traced part name', { exact: true })).toHaveValue('This save must fail');
+                  await expect(page.getByRole('button', { name: /^This save must fail/ })).toHaveCount(0);
+                  await page.getByRole('button', { name: 'Delete ' + traceName, exact: true }).click();
+                  await expect(page.getByRole('button', { name: new RegExp('^' + traceName) })).toBeVisible();
+                  assert.deepEqual(JSON.parse(await readSetting(traceKey)), savedTrace);
+                  await page.screenshot({ path: path.join(out, 'save-failure-preserves-preset.png') });
+                });
+              });
+              await page.getByRole('button', { name: 'mm', exact: true }).click();
+              await expect.poll(async () => JSON.parse(await readSetting('pgs-canvas-editor-v1')).unit).toBe('mm');
               const saved = await check('Save xTool preset through the UI', async () => {
                 const dialog = await openConverter();
                 await dialog.getByRole('button', { name: 'Example', exact: true }).click();
                 await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
                 await dialog.getByRole('button', { name: /^Save selected(?: \(\d+\))?$/ }).click();
-                await expect.poll(async () => page.evaluate(key => JSON.parse(localStorage.getItem(key) || '[]').length, presetKey)).toBe(1);
-                savedPreset = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), presetKey);
+                await expect.poll(async () => JSON.parse(await readSetting(presetKey) || '[]').length).toBe(1);
+                savedPreset = JSON.parse(await readSetting(presetKey));
                 assert.equal(savedPreset[0].preset, 'Dark mark');
               });
               if (saved) {
+                await check('Failed xTool saves show an error and preserve existing presets', async () => {
+                  await failDiskWrites(async () => {
+                    const dialog = await openConverter();
+                    await dialog.getByRole('checkbox', { name: /Select Brass Photo details/i }).click();
+                    await dialog.getByRole('button', { name: /^Save selected(?: \(\d+\))?$/ }).click();
+                    await expect(page.getByText('Could not save xTool presets. Try again or export a copy.', { exact: true })).toBeVisible();
+                    assert.deepEqual(JSON.parse(await readSetting(presetKey)), savedPreset);
+                  });
+                });
                 await check('Saved xTool preset survives page reload', async () => {
                   await page.reload();
                   await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
                   const dialog = await openConverter();
                   await dialog.getByRole('button', { name: 'Load saved', exact: true }).click();
                   await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
-                  assert.deepEqual(await page.evaluate(key => JSON.parse(localStorage.getItem(key)), presetKey), savedPreset);
+                  assert.deepEqual(JSON.parse(await readSetting(presetKey)), savedPreset);
                 });
                 await closeDialogs();
                 await check('Sign out and sign back in', async () => {
@@ -275,11 +347,25 @@ jobs:
                 await loginIfNeeded();
                 await check('Saved xTool preset survives desktop restart', async () => {
                   const secondOrigin = new URL(page.url()).origin;
-                  const loaded = await page.evaluate(key => JSON.parse(localStorage.getItem(key) || '[]'), presetKey);
+                  const loaded = JSON.parse(await readSetting(presetKey) || '[]');
                   console.log('Desktop restart evidence: ' + JSON.stringify({ firstOrigin, secondOrigin, savedBefore: savedPreset.length, loadedAfter: loaded.length }));
                   assert.deepEqual(loaded, savedPreset, 'Saved presets are missing after closing and reopening the desktop app');
+                  const dialog = await openConverter();
+                  await dialog.getByRole('button', { name: 'Load saved', exact: true }).click();
+                  await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
                 });
                 await page.screenshot({ path: path.join(out, 'after-restart.png') });
+                await closeDialogs();
+                await check('Canvas unit selection survives desktop restart', async () => {
+                  await expect(page.getByRole('button', { name: 'mm', exact: true })).toHaveClass(/bg-primary/);
+                  assert.equal(JSON.parse(await readSetting('pgs-canvas-editor-v1')).unit, 'mm');
+                });
+                if (traced) await check('Saved traced part survives desktop restart and can be loaded', async () => {
+                  assert.deepEqual(JSON.parse(await readSetting(traceKey)), savedTrace);
+                  await page.getByRole('button', { name: new RegExp('^' + traceName) }).click();
+                  await expect(page.locator('[data-engraving-trace-point]')).toHaveCount(3);
+                  await page.screenshot({ path: path.join(out, 'trace-after-restart.png') });
+                });
               }
               await check('No uncaught browser JavaScript errors', async () => {
                 assert.deepEqual(pageErrors, []);
@@ -310,6 +396,14 @@ jobs:
           path: test-artifacts
           retention-days: 7
           if-no-files-found: ignore
+      - name: Upload verified Windows installer
+        if: steps.tests.outcome == 'success' && steps.lint.outcome == 'success' && steps.desktop.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Engraving-Prep-Tool-Windows-0.1.5
+          path: desktop-dist/*.exe
+          retention-days: 30
+          if-no-files-found: error
       - name: Report Windows results
         if: always()
         env:

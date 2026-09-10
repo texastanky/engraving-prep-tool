@@ -75,6 +75,7 @@ import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
 import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
 import { ScanLine, Crop, Wand2, Eraser, Frame, PenTool, Sparkles } from "lucide-react";
 import { toast } from "sonner";
+import { persistentStorage, storageError } from "@/lib/persistent-storage.ts";
 import CropModal from "./crop-modal.tsx";
 import { removeBackground, roundCorners } from "./image-utils.ts";
 import {
@@ -615,10 +616,11 @@ function TemplateThumbnail({ url, name }: { url: string; name: string }) {
 // Load saved non-image state synchronously before first render
 function loadSavedState(): Partial<SavedCanvasState> {
   try {
-    const raw = localStorage.getItem(STORAGE_KEY);
+    const raw = persistentStorage.getItem(STORAGE_KEY);
     if (!raw) return {};
     return JSON.parse(raw) as SavedCanvasState;
   } catch {
+    storageError("Could not load saved canvas settings.");
     return {};
   }
 }
@@ -821,7 +823,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   };
   const designResizeDragRef = useRef<DesignResizeDrag | null>(null);
 
-  // Auto-save tool settings to localStorage (images are NOT saved — start fresh each session)
+  // Save tool settings; source images remain session-only.
   useEffect(() => {
     const toSave: SavedCanvasState = {
       unit,
@@ -834,9 +836,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       designState: null,
     };
     try {
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
+      persistentStorage.setItem(STORAGE_KEY, JSON.stringify(toSave));
     } catch {
-      // Storage quota exceeded — silently ignore
+      storageError("Could not save canvas settings. Try again before closing the app.");
     }
   }, [unit, material, selectedPresetId, showRuler, resizeMode]);
 
@@ -1039,21 +1041,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       ctx.restore();
     }
 
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints]);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-    canvas.width = displayWidth;
-    canvas.height = displayHeight;
-    draw();
-    drawExternalRulers();
-  }, [displayWidth, displayHeight, draw]);
-
-  useEffect(() => {
-    draw();
-    drawExternalRulers();
-  }, [draw]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, clipDesignToTrace, penTraceClosed, penTracePoints]);
 
   // --- External ruler drawing (drawn on dedicated canvases outside the workspace) ---
   const drawExternalRulers = useCallback(() => {
@@ -1063,8 +1051,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
     const w = displayWidth;
     const h = displayHeight;
-    const matW = material.widthIn;
-    const matH = material.heightIn;
+    const matW = unit === "mm" ? inToMm(material.widthIn) : material.widthIn;
+    const matH = unit === "mm" ? inToMm(material.heightIn) : material.heightIn;
     const u = unit;
     const rT = RULER_THICKNESS;
 
@@ -1131,7 +1119,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
   }, [displayWidth, displayHeight, material, unit]);
 
-
+  useEffect(() => {
+    const canvas = canvasRef.current;
+    if (!canvas) return;
+    canvas.width = displayWidth;
+    canvas.height = displayHeight;
+    draw();
+    drawExternalRulers();
+  }, [displayWidth, displayHeight, draw, drawExternalRulers, showRuler]);
 
   // --- File loading ---
   const loadPartPhoto = useCallback((src: string) => {
@@ -1875,7 +1870,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       fillColor: penTraceStyle.fillColor,
     });
 
-    addCustomPreset({
+    const savedId = addCustomPreset({
       name,
       width: material.widthIn,
       height: material.heightIn,
@@ -1887,6 +1882,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       createdAt: new Date().toISOString(),
       source: "pen-trace",
     });
+    if (!savedId) return;
     setTracePresetName("");
     toast.success(t("toast.penTracePresetSaved", { name }));
   }, [
@@ -1914,7 +1910,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const deleteSavedTracePreset = useCallback(
     (preset: CustomPreset) => {
-      removeCustomPreset(preset.id);
+      if (!removeCustomPreset(preset.id)) return;
       toast.success(t("toast.penTracePresetDeleted", { name: preset.name }));
     },
     [removeCustomPreset, t]

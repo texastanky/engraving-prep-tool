@@ -1,6 +1,7 @@
 import { Download, RefreshCw, X } from "lucide-react";
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
+import { persistentStorage } from "@/lib/persistent-storage.ts";
 import { Button } from "@/components/ui/button.tsx";
 import {
   APP_VERSION,
@@ -19,7 +20,7 @@ function dismissedKey(version: string) {
 
 function hasDismissed(version: string) {
   try {
-    return window.localStorage.getItem(dismissedKey(version)) === "1";
+    return persistentStorage.getItem(dismissedKey(version)) === "1";
   } catch {
     return false;
   }
@@ -27,7 +28,7 @@ function hasDismissed(version: string) {
 
 function dismissVersion(version: string) {
   try {
-    window.localStorage.setItem(dismissedKey(version), "1");
+    persistentStorage.setItem(dismissedKey(version), "1");
   } catch {
     // Dismissal is a convenience only; the update notice can still work without storage.
   }
