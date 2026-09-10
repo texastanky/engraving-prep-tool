@@ -1,0 +1,43 @@
+name: Engraving app verification
+on:
+  push:
+    branches:
+      - codex/test-engraving-20260909
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Set up pnpm
+        run: npm install --global pnpm@10
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run existing tests
+        id: tests
+        continue-on-error: true
+        run: pnpm test
+      - name: Build production app
+        id: build
+        continue-on-error: true
+        run: pnpm build
+      - name: Run lint
+        id: lint
+        continue-on-error: true
+        run: pnpm lint
+      - name: Report results
+        if: always()
+        env:
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          LINT_RESULT: ${{ steps.lint.outcome }}
+        run: |
+          printf '| Check | Result |\n| --- | --- |\n| Tests | %s |\n| Build | %s |\n| Lint | %s |\n' "$TEST_RESULT" "$BUILD_RESULT" "$LINT_RESULT" >> "$GITHUB_STEP_SUMMARY"
+          test "$TEST_RESULT" = success && test "$BUILD_RESULT" = success && test "$LINT_RESULT" = success
