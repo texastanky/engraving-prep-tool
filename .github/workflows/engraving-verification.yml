@@ -218,7 +218,7 @@ jobs:
                 const dialog = await openConverter();
                 await dialog.getByRole('button', { name: 'Example', exact: true }).click();
                 await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
-                await dialog.getByRole('button', { name: 'Save selected', exact: true }).click();
+                await dialog.getByRole('button', { name: /^Save selected(?: \(\d+\))?$/ }).click();
                 await expect.poll(async () => page.evaluate(key => JSON.parse(localStorage.getItem(key) || '[]').length, presetKey)).toBe(1);
                 savedPreset = await page.evaluate(key => JSON.parse(localStorage.getItem(key)), presetKey);
                 assert.equal(savedPreset[0].preset, 'Dark mark');
