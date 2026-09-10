@@ -1,10 +1,20 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, ipcMain, shell } = require("electron");
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const http = require("node:http");
 const path = require("node:path");
 const { pathToFileURL } = require("node:url");
+const { createDesktopStorage } = require("./storage.cjs");
+
+const hasInstanceLock = app.requestSingleInstanceLock();
+if (!hasInstanceLock) app.quit();
+app.on("second-instance", () => {
+  const window = BrowserWindow.getAllWindows()[0];
+  if (!window) return;
+  if (window.isMinimized()) window.restore();
+  window.focus();
+});
 
 const LOCAL_API_BODY_LIMIT = 12 * 1024 * 1024;
 
@@ -40,6 +50,11 @@ async function ensureDesktopAuthEnv() {
       process.env.AUTH_SESSION_SECRET = (await fsp.readFile(secretPath, "utf8")).trim();
     } catch (error) {
       if (error?.code !== "ENOENT") throw error;
+      const secret = crypto.randomBytes(48).toString("base64url");
+      await fsp.writeFile(secretPath, secret, { mode: 0o600 });
+      process.env.AUTH_SESSION_SECRET = secret;
+    }
+    if (!process.env.AUTH_SESSION_SECRET) {
       const secret = crypto.randomBytes(48).toString("base64url");
       await fsp.writeFile(secretPath, secret, { mode: 0o600 });
       process.env.AUTH_SESSION_SECRET = secret;
@@ -176,6 +191,7 @@ function createWindow(startUrl) {
     autoHideMenuBar: true,
     backgroundColor: "#0d1117",
     webPreferences: {
+      preload: path.join(__dirname, "preload.cjs"),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -193,6 +209,7 @@ function createWindow(startUrl) {
 let bundledServer;
 
 app.whenReady().then(async () => {
+  if (!hasInstanceLock) return;
   const bundledIndex = path.join(__dirname, "..", "dist", "index.html");
   let startUrl = "http://localhost:5173";
 
@@ -202,6 +219,27 @@ app.whenReady().then(async () => {
     startUrl = bundled.url;
   }
 
+  const settings = createDesktopStorage(app.getPath("userData"));
+  ipcMain.on("engraving:settings", (event, request) => {
+    try {
+      // Only the app's own top-level window can access its settings.
+      if (!BrowserWindow.fromWebContents(event.sender) ||
+          event.senderFrame !== event.sender.mainFrame ||
+          new URL(event.senderFrame.url).origin !== new URL(startUrl).origin) {
+        throw new Error("Untrusted settings request");
+      }
+      if (request?.operation === "get") {
+        event.returnValue = { ok: true, value: settings.getItem(request.key) };
+      } else if (request?.operation === "set") {
+        settings.setItem(request.key, request.value);
+        event.returnValue = { ok: true, value: null };
+      } else {
+        throw new Error("Unsupported settings operation");
+      }
+    } catch {
+      event.returnValue = { ok: false };
+    }
+  });
   createWindow(startUrl);
 
   app.on("activate", () => {

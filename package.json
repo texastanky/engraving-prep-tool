@@ -1,7 +1,7 @@
 {
   "name": "app-template",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "type": "module",
   "main": "desktop/main.cjs",
   "scripts": {
@@ -10,7 +10,7 @@
     "preview": "vite preview",
     "build": "tsc -b && vite build",
     "build:installer": "pnpm run build && electron-builder --win nsis --x64 --publish never",
-    "test": "vitest run",
+    "test": "vitest run && node --test desktop/storage.test.cjs server/auth.test.js",
     "lint": "eslint .",
     "prettier-fix": "prettier --write .",
     "prettier-check": "prettier --check ."
@@ -81,6 +81,7 @@
       "dist/**/*",
       "server/**/*",
       "package.json",
+      "!**/*.test.*",
       "!node_modules/**/*"
     ],
     "win": {

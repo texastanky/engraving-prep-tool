@@ -17,7 +17,11 @@ function fromBase64Url(input) {
 }
 
 function getSessionSecret() {
-  return process.env.AUTH_SESSION_SECRET || "local-dev-only-change-before-deploy";
+  const secret = process.env.AUTH_SESSION_SECRET;
+  if (!secret?.trim() || secret === "local-dev-only-change-before-deploy") {
+    throw new Error("AUTH_SESSION_SECRET must be configured");
+  }
+  return secret;
 }
 
 function timingSafeEqual(a, b) {
@@ -150,9 +154,8 @@ export function createSession(user) {
 export function verifySession(token) {
   if (!token || typeof token !== "string" || !token.includes(".")) return null;
   const [payload, signature] = token.split(".");
-  if (!payload || !signature || !timingSafeEqual(signPayload(payload), signature)) return null;
-
   try {
+    if (!payload || !signature || !timingSafeEqual(signPayload(payload), signature)) return null;
     const session = JSON.parse(fromBase64Url(payload));
     if (!session.exp || session.exp < Math.floor(Date.now() / 1000)) return null;
     return {

@@ -18,6 +18,38 @@ type Props = {
 
 const HANDLE_SIZE = 10; // px for hit-testing
 
+// --- Handle rects ---
+function getHandleRects(cr: CropRect): Record<string, { x: number; y: number; r: number; b: number }> {
+  const hs = HANDLE_SIZE;
+  const cx = cr.x + cr.w / 2;
+  const cy = cr.y + cr.h / 2;
+  return {
+    tl: { x: cr.x,         y: cr.y,         r: cr.x + hs,       b: cr.y + hs },
+    tr: { x: cr.x + cr.w - hs, y: cr.y,         r: cr.x + cr.w,     b: cr.y + hs },
+    bl: { x: cr.x,         y: cr.y + cr.h - hs, r: cr.x + hs,       b: cr.y + cr.h },
+    br: { x: cr.x + cr.w - hs, y: cr.y + cr.h - hs, r: cr.x + cr.w, b: cr.y + cr.h },
+    t:  { x: cx - hs / 2,  y: cr.y,         r: cx + hs / 2,     b: cr.y + hs },
+    b:  { x: cx - hs / 2,  y: cr.y + cr.h - hs, r: cx + hs / 2, b: cr.y + cr.h },
+    l:  { x: cr.x,         y: cy - hs / 2,  r: cr.x + hs,       b: cy + hs / 2 },
+    r:  { x: cr.x + cr.w - hs, y: cy - hs / 2, r: cr.x + cr.w, b: cy + hs / 2 },
+  };
+}
+
+function hitHandle(px: number, py: number, cr: CropRect): Handle {
+  const handles = getHandleRects(cr);
+  for (const [key, h] of Object.entries(handles)) {
+    const padded = { x: h.x - 4, y: h.y - 4, r: h.r + 4, b: h.b + 4 };
+    if (px >= padded.x && px <= padded.r && py >= padded.y && py <= padded.b) {
+      return key as Handle;
+    }
+  }
+  // Inside crop body → move
+  if (px >= cr.x && px <= cr.x + cr.w && py >= cr.y && py <= cr.y + cr.h) {
+    return "move";
+  }
+  return null;
+}
+
 export default function CropModal({ open, imageSrc, onClose, onCrop, isCropPart = false, locale = "en" }: Props) {
   const t = useCallback(
     (key: string, values?: EngravingCopyValues) => engravingT(key, values, locale),
@@ -129,38 +161,6 @@ export default function CropModal({ open, imageSrc, onClose, onCrop, isCropPart 
     if (!loaded || !canvasRef.current) return;
     draw(canvasRef.current, imgRect, crop);
   }, [crop, imgRect, loaded, draw]);
-
-  // --- Handle rects ---
-  function getHandleRects(cr: CropRect): Record<string, { x: number; y: number; r: number; b: number }> {
-    const hs = HANDLE_SIZE;
-    const cx = cr.x + cr.w / 2;
-    const cy = cr.y + cr.h / 2;
-    return {
-      tl: { x: cr.x,         y: cr.y,         r: cr.x + hs,       b: cr.y + hs },
-      tr: { x: cr.x + cr.w - hs, y: cr.y,         r: cr.x + cr.w,     b: cr.y + hs },
-      bl: { x: cr.x,         y: cr.y + cr.h - hs, r: cr.x + hs,       b: cr.y + cr.h },
-      br: { x: cr.x + cr.w - hs, y: cr.y + cr.h - hs, r: cr.x + cr.w, b: cr.y + cr.h },
-      t:  { x: cx - hs / 2,  y: cr.y,         r: cx + hs / 2,     b: cr.y + hs },
-      b:  { x: cx - hs / 2,  y: cr.y + cr.h - hs, r: cx + hs / 2, b: cr.y + cr.h },
-      l:  { x: cr.x,         y: cy - hs / 2,  r: cr.x + hs,       b: cy + hs / 2 },
-      r:  { x: cr.x + cr.w - hs, y: cy - hs / 2, r: cr.x + cr.w, b: cy + hs / 2 },
-    };
-  }
-
-  function hitHandle(px: number, py: number, cr: CropRect): Handle {
-    const handles = getHandleRects(cr);
-    for (const [key, h] of Object.entries(handles)) {
-      const padded = { x: h.x - 4, y: h.y - 4, r: h.r + 4, b: h.b + 4 };
-      if (px >= padded.x && px <= padded.r && py >= padded.y && py <= padded.b) {
-        return key as Handle;
-      }
-    }
-    // Inside crop body → move
-    if (px >= cr.x && px <= cr.x + cr.w && py >= cr.y && py <= cr.y + cr.h) {
-      return "move";
-    }
-    return null;
-  }
 
   function canvasPos(e: React.MouseEvent | React.TouchEvent): { x: number; y: number } {
     const c = canvasRef.current!;

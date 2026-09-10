@@ -1,7 +1,8 @@
 /**
- * Hook for managing custom part outline presets stored in localStorage.
+ * Custom part outlines saved to desktop app data or browser storage.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useRef } from "react";
+import { persistentStorage, storageError } from "@/lib/persistent-storage.ts";
 
 export type CustomPresetPoint = {
   x: number;
@@ -34,7 +35,7 @@ const STORAGE_KEY = "laser-canvas-custom-presets";
 function loadPresets(): CustomPreset[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(STORAGE_KEY);
+    const raw = persistentStorage.getItem(STORAGE_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -48,42 +49,38 @@ function loadPresets(): CustomPreset[] {
       typeof preset.maskDataUrl === "string"
     ));
   } catch {
+    storageError("Could not load saved part presets.");
     return [];
-  }
-}
-
-function savePresets(presets: CustomPreset[]): void {
-  if (typeof window === "undefined") return;
-  try {
-    window.localStorage.setItem(STORAGE_KEY, JSON.stringify(presets));
-  } catch {
-    // Storage may be full; silently ignore
   }
 }
 
 export function useCustomPresets() {
   const [presets, setPresets] = useState<CustomPreset[]>(() => loadPresets());
+  const currentPresets = useRef(presets);
+
+  const persist = useCallback((updated: CustomPreset[]): boolean => {
+    try {
+      persistentStorage.setItem(STORAGE_KEY, JSON.stringify(updated));
+      currentPresets.current = updated;
+      setPresets(updated);
+      return true;
+    } catch {
+      storageError("Could not save part presets. Try again or export your trace.");
+      return false;
+    }
+  }, []);
 
   const addPreset = useCallback((preset: Omit<CustomPreset, "id">) => {
     const newPreset: CustomPreset = {
       ...preset,
-      id: `custom-${Date.now()}`,
+      id: `custom-${crypto.randomUUID()}`,
     };
-    setPresets((prev) => {
-      const updated = [...prev, newPreset];
-      savePresets(updated);
-      return updated;
-    });
-    return newPreset.id;
-  }, []);
+    return persist([...currentPresets.current, newPreset]) ? newPreset.id : null;
+  }, [persist]);
 
   const removePreset = useCallback((id: string) => {
-    setPresets((prev) => {
-      const updated = prev.filter((p) => p.id !== id);
-      savePresets(updated);
-      return updated;
-    });
-  }, []);
+    return persist(currentPresets.current.filter((p) => p.id !== id));
+  }, [persist]);
 
   return { presets, addPreset, removePreset };
 }

@@ -10,3 +10,10 @@ interface ImportMeta {
 
 declare const __APP_UPDATE_MANIFEST_URL__: string | undefined;
 declare const __APP_VERSION__: string | undefined;
+
+interface Window {
+  engravingStorage?: {
+    getItem(key: string): string | null;
+    setItem(key: string, value: string): void;
+  };
+}

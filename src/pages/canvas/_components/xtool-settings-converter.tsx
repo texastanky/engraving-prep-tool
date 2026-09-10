@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { persistentStorage, storageError } from "@/lib/persistent-storage.ts";
 import { Badge } from "@/components/ui/badge.tsx";
 import { Button } from "@/components/ui/button.tsx";
 import { Checkbox } from "@/components/ui/checkbox.tsx";
@@ -168,7 +169,7 @@ function createSavedId(): string {
 function readSavedPresets(): SavedPreset[] {
   if (typeof window === "undefined") return [];
   try {
-    const raw = window.localStorage.getItem(SAVED_PRESETS_KEY);
+    const raw = persistentStorage.getItem(SAVED_PRESETS_KEY);
     if (!raw) return [];
     const parsed = JSON.parse(raw);
     if (!Array.isArray(parsed)) return [];
@@ -182,6 +183,7 @@ function readSavedPresets(): SavedPreset[] {
         typeof item.preset === "string",
     );
   } catch {
+    storageError("Could not load saved xTool presets.");
     return [];
   }
 }
@@ -189,7 +191,7 @@ function readSavedPresets(): SavedPreset[] {
 function writeSavedPresets(presets: SavedPreset[]): boolean {
   if (typeof window === "undefined") return false;
   try {
-    window.localStorage.setItem(SAVED_PRESETS_KEY, JSON.stringify(presets));
+    persistentStorage.setItem(SAVED_PRESETS_KEY, JSON.stringify(presets));
     return true;
   } catch {
     return false;
@@ -830,7 +832,7 @@ function XtoolSettingsConverterPanel() {
 
   const persistSavedPresets = useCallback((nextPresets: SavedPreset[]) => {
     if (!writeSavedPresets(nextPresets)) {
-      toast.error("Could not save presets in this browser.");
+      toast.error("Could not save xTool presets. Try again or export a copy.");
       return false;
     }
     setSavedPresets(nextPresets);
@@ -1088,7 +1090,7 @@ function XtoolSettingsConverterPanel() {
                 Load saved
               </Button>
               <p className="mt-2 text-[10px] leading-relaxed text-muted-foreground">
-                Local only in this browser. Nothing here is uploaded or made public.
+                Saved locally on this device. Export a copy to move presets to another computer.
               </p>
               {savedPresets.length > 0 && (
                 <div className="mt-2 max-h-40 space-y-1 overflow-y-auto pr-1">

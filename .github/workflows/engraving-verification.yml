@@ -1,0 +1,425 @@
+name: Engraving app Windows verification
+on:
+  push:
+    branches:
+      - codex/test-engraving-20260909
+      - codex/fix-desktop-persistence
+permissions:
+  contents: read
+jobs:
+  verify:
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Report Windows environment
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
+          node --version
+      - name: Set up pnpm
+        run: npm install --global pnpm@10
+      - name: Install locked dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Run existing tests on Windows
+        id: tests
+        continue-on-error: true
+        run: pnpm test
+      - name: Build Windows installer
+        id: build
+        continue-on-error: true
+        run: pnpm run build:installer
+      - name: Run lint
+        id: lint
+        continue-on-error: true
+        run: pnpm lint
+      - name: Install app on disposable Windows runner
+        if: steps.build.outcome == 'success'
+        id: installer
+        timeout-minutes: 3
+        continue-on-error: true
+        run: |
+          $installerFile = Get-ChildItem -LiteralPath 'desktop-dist' -Filter '*.exe' -File | Where-Object Name -NotLike '*uninstall*' | Select-Object -First 1
+          if (-not $installerFile) { throw 'Windows installer was not produced' }
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'engraving-test-install'
+          $installProcess = Start-Process -FilePath $installerFile.FullName -ArgumentList @('/S', "/D=$installDirectory") -Wait -PassThru -WindowStyle Hidden
+          if ($installProcess.ExitCode -ne 0) { throw "Installer failed with exit code $($installProcess.ExitCode)" }
+          $installedExecutable = Join-Path $installDirectory 'Engraving Prep Tool.exe'
+          if (-not (Test-Path -LiteralPath $installedExecutable)) { throw "Installed executable was not found: $installedExecutable" }
+          "ENGRAVING_TEST_EXE=$installedExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Path 'test-artifacts' -Force | Out-Null
+          @{
+            operatingSystem = (Get-CimInstance Win32_OperatingSystem).Caption
+            installer = $installerFile.Name
+            installerSha256 = (Get-FileHash -LiteralPath $installerFile.FullName -Algorithm SHA256).Hash
+            installedExecutable = $installedExecutable
+            installerExitCode = $installProcess.ExitCode
+          } | ConvertTo-Json | Set-Content -LiteralPath 'test-artifacts/installer-report.json'
+          Write-Output 'PASS: Windows installer completed and installed executable exists'
+      - name: Prepare Windows UI testing
+        if: steps.installer.outcome == 'success'
+        run: npm install --prefix "$env:RUNNER_TEMP/engraving-browser" @playwright/test@1
+      - name: Exercise installed Windows app
+        if: steps.installer.outcome == 'success'
+        id: desktop
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          @'
+          const { _electron: electron, expect } = require('@playwright/test');
+          const fs = require('node:fs/promises');
+          const path = require('node:path');
+          const assert = require('node:assert/strict');
+          const out = path.join(process.cwd(), 'test-artifacts');
+          const results = [];
+          const pageErrors = [];
+          const presetKey = 'pgs-xtool-converter-saved-presets-v1';
+          const credentials = { email: 'engraving-test@example.test', password: 'Temporary-test-password-2026' };
+          let app, page, firstOrigin, savedPreset, dataDirectory, savedTrace;
+          const traceKey = 'laser-canvas-custom-presets';
+          const traceName = 'Windows restart test plate';
+          async function readSetting(key) {
+            return page.evaluate(key => window.engravingStorage.getItem(key), key);
+          }
+          async function failDiskWrites(fn) {
+            const settingsPath = path.join(dataDirectory, 'engraving-settings.json');
+            const before = await fs.readFile(settingsPath, 'utf8');
+            const blocked = settingsPath + '.tmp';
+            await fs.mkdir(blocked);
+            try {
+              await fn();
+              assert.equal(await fs.readFile(settingsPath, 'utf8'), before, 'A failed save changed the existing file');
+            } finally {
+              await fs.rmdir(blocked);
+            }
+          }
+          async function check(name, fn) {
+            try {
+              const detail = await fn();
+              results.push({ name, status: 'PASS', detail: detail || '' });
+              console.log('PASS: ' + name + (detail ? ' - ' + detail : ''));
+              return true;
+            } catch (error) {
+              results.push({ name, status: 'FAIL', detail: error.message });
+              console.log('FAIL: ' + name + ' - ' + error.message);
+              if (page) console.log('UI at failure: ' + (await page.locator('body').innerText()).slice(0,6000));
+              if (page) await page.screenshot({ path: path.join(out, 'failure-' + results.length + '.png') }).catch(() => {});
+              return false;
+            }
+          }
+          async function launch() {
+            app = await electron.launch({
+              executablePath: process.env.ENGRAVING_TEST_EXE,
+              args: [],
+              cwd: process.cwd(),
+              acceptDownloads: true,
+              timeout: 60000,
+            });
+            page = await app.firstWindow();
+            dataDirectory = await app.evaluate(({ app }) => app.getPath('userData'));
+            page.setDefaultTimeout(15000);
+            page.on('pageerror', error => pageErrors.push(error.message));
+            await page.getByRole('heading', { name: 'Engraving Prep Tool', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+          }
+          async function closeDialogs() {
+            if (await page.getByRole('dialog').count()) await page.keyboard.press('Escape');
+          }
+          async function openConverter() {
+            if (!(await page.getByRole('dialog').count()))
+              await page.getByRole('button', { name: 'Open full converter', exact: true }).click();
+            const dialog = page.getByRole('dialog');
+            await dialog.waitFor();
+            return dialog;
+          }
+          async function loginIfNeeded() {
+            if (await page.locator('input[type=email]').count()) {
+              await page.getByLabel('Email', { exact: true }).fill(credentials.email);
+              await page.getByLabel('Password', { exact: true }).fill(credentials.password);
+              await page.locator('button[type=submit]').click();
+            }
+            await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+          }
+          async function exportFile(label, extension) {
+            await page.getByRole('button', { name: 'Export', exact: true }).click();
+            const downloading = page.waitForEvent('download', { timeout: 20000 });
+            await page.getByRole('menuitem', { name: label, exact: true }).click();
+            const download = await downloading;
+            assert.equal(await download.failure(), null);
+            assert.ok(download.suggestedFilename().endsWith('.' + extension));
+            const target = path.join(out, 'export-' + results.length + '.' + extension);
+            await download.saveAs(target);
+            const bytes = await fs.readFile(target);
+            assert.ok(bytes.length > 100, 'Export is empty or too small');
+            return bytes;
+          }
+          (async () => {
+            await fs.mkdir(out, { recursive: true });
+            assert.equal(process.platform, 'win32', 'These checks must run on Windows');
+            console.log('WINDOWS TEST ENVIRONMENT: ' + JSON.stringify({ platform: process.platform, architecture: process.arch, release: require('node:os').release(), executable: process.env.ENGRAVING_TEST_EXE }));
+            try {
+              await launch();
+              firstOrigin = new URL(page.url()).origin;
+              console.log('Initial desktop origin: ' + firstOrigin);
+              await check('Unauthenticated AI endpoints reject access', async () => {
+                for (const endpoint of ['/api/assistant', '/api/ai-compose']) {
+                  const response = await page.request.post(firstOrigin + endpoint, { data: {} });
+                  assert.equal(response.status(), 401, endpoint);
+                }
+              });
+              await check('Invalid sign-in shows an error', async () => {
+                await page.getByLabel('Email', { exact: true }).fill(credentials.email);
+                await page.getByLabel('Password', { exact: true }).fill('Incorrect-test-password');
+                await page.locator('button[type=submit]').click();
+                await expect(page.getByRole('alert')).toContainText('Email or password did not match.');
+              });
+              const registered = await check('Create test account and open editor', async () => {
+                await page.getByRole('button', { name: 'Free account', exact: true }).click();
+                await page.getByLabel('Name', { exact: true }).fill('Disposable Test');
+                await page.getByLabel('Email', { exact: true }).fill(credentials.email);
+                await page.getByLabel('Password', { exact: true }).fill(credentials.password);
+                await page.locator('button[type=submit]').click();
+                await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+                await closeDialogs();
+                await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeDisabled();
+              });
+              if (!registered) throw new Error('Cannot continue editor checks without authentication');
+              const uploaded = await check('Upload SVG design', async () => {
+                const choosing = page.waitForEvent('filechooser');
+                await page.getByRole('button', { name: 'Upload Design Image', exact: true }).click();
+                const chooser = await choosing;
+                await chooser.setFiles({
+                  name: 'test-target.svg', mimeType: 'image/svg+xml',
+                  buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120" viewBox="0 0 240 120"><rect x="5" y="5" width="230" height="110" fill="black"/><circle cx="120" cy="60" r="35" fill="white"/></svg>'),
+                });
+                await expect(page.getByRole('button', { name: 'Replace Design', exact: true })).toBeVisible();
+                await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeEnabled();
+              });
+              if (uploaded) {
+                await check('Resize design by dragging its handle', async () => {
+                  const handle = page.locator('[data-engraving-design-handle="e"]');
+                  await handle.scrollIntoViewIfNeeded();
+                  const before = await handle.boundingBox();
+                  assert.ok(before);
+                  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+                  await page.mouse.down();
+                  await page.mouse.move(before.x + before.width / 2 + 35, before.y + before.height / 2, { steps: 8 });
+                  await page.mouse.up();
+                  await expect.poll(async () => (await handle.boundingBox()).x).toBeGreaterThan(before.x + 10);
+                });
+                await check('Add, drag, and remove a local warp dot', async () => {
+                  await page.getByRole('button', { name: 'Warp / Dots', exact: true }).click();
+                  const dots = page.locator('[data-engraving-local-warp-pin]');
+                  const beforeCount = await dots.count();
+                  await page.locator('[data-engraving-warp-interior-hitarea]').click();
+                  await expect(dots).toHaveCount(beforeCount + 1);
+                  const dot = dots.last();
+                  const before = await dot.boundingBox();
+                  await page.mouse.move(before.x + before.width / 2, before.y + before.height / 2);
+                  await page.mouse.down();
+                  await page.mouse.move(before.x + before.width / 2 + 20, before.y + before.height / 2 + 12, { steps: 5 });
+                  await page.mouse.up();
+                  await expect.poll(async () => (await dot.boundingBox()).x).toBeGreaterThan(before.x + 5);
+                  await dot.click({ button: 'right' });
+                  await expect(dots).toHaveCount(beforeCount);
+                  await page.getByRole('button', { name: 'Done', exact: true }).click();
+                });
+                await check('PNG export has correct dimensions and 300 DPI', async () => {
+                  const bytes = await exportFile('PNG (transparent)', 'png');
+                  const state = JSON.parse(await readSetting('pgs-canvas-editor-v1'));
+                  assert.equal(bytes.subarray(1, 4).toString(), 'PNG');
+                  assert.equal(bytes.readUInt32BE(16), Math.round(state.material.widthIn * 300));
+                  assert.equal(bytes.readUInt32BE(20), Math.round(state.material.heightIn * 300));
+                  let phys = false;
+                  for (let i = 8; i + 12 <= bytes.length; i += bytes.readUInt32BE(i) + 12) {
+                    if (bytes.subarray(i + 4, i + 8).toString() === 'pHYs') {
+                      assert.equal(bytes.readUInt32BE(i + 8), 11811);
+                      assert.equal(bytes.readUInt32BE(i + 12), 11811);
+                      phys = true;
+                      break;
+                    }
+                  }
+                  assert.ok(phys, 'PNG DPI metadata missing');
+                });
+                await check('SVG export includes physical dimensions and artwork', async () => {
+                  const bytes = await exportFile('SVG (xTool actual size)', 'svg');
+                  assert.match(bytes.toString(), /width="[\d.]+mm"/);
+                  assert.match(bytes.toString(), /height="[\d.]+mm"/);
+                  assert.match(bytes.toString(), /data:image\/png;base64,/);
+                });
+                await check('JPEG export produces a valid file', async () => {
+                  const bytes = await exportFile('JPEG — white background', 'jpg');
+                  assert.equal(bytes.readUInt16BE(0), 0xffd8);
+                });
+                await check('PDF export produces a valid file', async () => {
+                  const bytes = await exportFile('PDF (actual material size)', 'pdf');
+                  assert.equal(bytes.subarray(0, 5).toString(), '%PDF-');
+                });
+                await page.screenshot({ path: path.join(out, 'editor.png') });
+              }
+              await check('Desktop storage bridge rejects unsupported keys', async () => {
+                const denied = await page.evaluate(() => {
+                  try { window.engravingStorage.setItem('../../auth-users.json', 'bad'); return false; }
+                  catch { return true; }
+                });
+                assert.ok(denied);
+              });
+              const traced = await check('Save a traced part through the UI', async () => {
+                const choosing = page.waitForEvent('filechooser');
+                await page.getByRole('button', { name: 'Upload Part Photo', exact: true }).click();
+                await (await choosing).setFiles({
+                  name: 'part.svg', mimeType: 'image/svg+xml',
+                  buffer: Buffer.from('<svg xmlns="http://www.w3.org/2000/svg" width="240" height="120"><rect width="240" height="120" fill="silver"/></svg>'),
+                });
+                await page.getByRole('button', { name: 'Trace', exact: true }).click();
+                const drawing = page.locator('canvas[style*="crosshair"]');
+                await drawing.scrollIntoViewIfNeeded();
+                const box = await drawing.boundingBox();
+                assert.ok(box);
+                for (const [x, y] of [[0.2, 0.2], [0.65, 0.2], [0.65, 0.7]]) {
+                  await drawing.click({ position: { x: box.width * x, y: box.height * y } });
+                }
+                await expect(page.locator('[data-engraving-trace-point]')).toHaveCount(3);
+                await page.getByLabel('Traced part name', { exact: true }).fill(traceName);
+                await page.getByRole('button', { name: 'Save traced part', exact: true }).click();
+                await expect(page.getByRole('button', { name: new RegExp('^' + traceName) })).toBeVisible();
+                savedTrace = JSON.parse(await readSetting(traceKey));
+                assert.equal(savedTrace[0].name, traceName);
+              });
+              if (traced) await check('Failed trace saves and deletions show errors and preserve existing presets', async () => {
+                await failDiskWrites(async () => {
+                  await page.getByLabel('Traced part name', { exact: true }).fill('This save must fail');
+                  await page.getByRole('button', { name: 'Save traced part', exact: true }).click();
+                  await expect(page.getByText('Could not save part presets. Try again or export your trace.', { exact: true })).toBeVisible();
+                  await expect(page.getByLabel('Traced part name', { exact: true })).toHaveValue('This save must fail');
+                  await expect(page.getByRole('button', { name: /^This save must fail/ })).toHaveCount(0);
+                  await page.getByRole('button', { name: 'Delete ' + traceName, exact: true }).click();
+                  await expect(page.getByRole('button', { name: new RegExp('^' + traceName) })).toBeVisible();
+                  assert.deepEqual(JSON.parse(await readSetting(traceKey)), savedTrace);
+                  await page.screenshot({ path: path.join(out, 'save-failure-preserves-preset.png') });
+                });
+              });
+              await page.getByRole('button', { name: 'mm', exact: true }).click();
+              await expect.poll(async () => JSON.parse(await readSetting('pgs-canvas-editor-v1')).unit).toBe('mm');
+              const saved = await check('Save xTool preset through the UI', async () => {
+                const dialog = await openConverter();
+                await dialog.getByRole('button', { name: 'Example', exact: true }).click();
+                await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
+                await dialog.getByRole('button', { name: /^Save selected(?: \(\d+\))?$/ }).click();
+                await expect.poll(async () => JSON.parse(await readSetting(presetKey) || '[]').length).toBe(1);
+                savedPreset = JSON.parse(await readSetting(presetKey));
+                assert.equal(savedPreset[0].preset, 'Dark mark');
+              });
+              if (saved) {
+                await check('Failed xTool saves show an error and preserve existing presets', async () => {
+                  await failDiskWrites(async () => {
+                    const dialog = await openConverter();
+                    await dialog.getByRole('checkbox', { name: /Select Brass Photo details/i }).click();
+                    await dialog.getByRole('button', { name: /^Save selected(?: \(\d+\))?$/ }).click();
+                    await expect(page.getByText('Could not save xTool presets. Try again or export a copy.', { exact: true })).toBeVisible();
+                    assert.deepEqual(JSON.parse(await readSetting(presetKey)), savedPreset);
+                  });
+                });
+                await check('Saved xTool preset survives page reload', async () => {
+                  await page.reload();
+                  await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
+                  const dialog = await openConverter();
+                  await dialog.getByRole('button', { name: 'Load saved', exact: true }).click();
+                  await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
+                  assert.deepEqual(JSON.parse(await readSetting(presetKey)), savedPreset);
+                });
+                await closeDialogs();
+                await check('Sign out and sign back in', async () => {
+                  await page.getByRole('button', { name: 'Sign out', exact: true }).click();
+                  await page.getByLabel('Email', { exact: true }).waitFor();
+                  await loginIfNeeded();
+                });
+                await app.evaluate(async ({ session }) => { await session.defaultSession.flushStorageData(); });
+                await app.close();
+                app = null;
+                await launch();
+                await loginIfNeeded();
+                await check('Saved xTool preset survives desktop restart', async () => {
+                  const secondOrigin = new URL(page.url()).origin;
+                  const loaded = JSON.parse(await readSetting(presetKey) || '[]');
+                  console.log('Desktop restart evidence: ' + JSON.stringify({ firstOrigin, secondOrigin, savedBefore: savedPreset.length, loadedAfter: loaded.length }));
+                  assert.deepEqual(loaded, savedPreset, 'Saved presets are missing after closing and reopening the desktop app');
+                  const dialog = await openConverter();
+                  await dialog.getByRole('button', { name: 'Load saved', exact: true }).click();
+                  await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
+                });
+                await page.screenshot({ path: path.join(out, 'after-restart.png') });
+                await closeDialogs();
+                await check('Canvas unit selection survives desktop restart', async () => {
+                  await expect(page.getByRole('button', { name: 'mm', exact: true })).toHaveClass(/bg-primary/);
+                  assert.equal(JSON.parse(await readSetting('pgs-canvas-editor-v1')).unit, 'mm');
+                });
+                if (traced) await check('Saved traced part survives desktop restart and can be loaded', async () => {
+                  assert.deepEqual(JSON.parse(await readSetting(traceKey)), savedTrace);
+                  await page.getByRole('button', { name: new RegExp('^' + traceName) }).click();
+                  await expect(page.locator('[data-engraving-trace-point]')).toHaveCount(3);
+                  await page.screenshot({ path: path.join(out, 'trace-after-restart.png') });
+                });
+              }
+              await check('No uncaught browser JavaScript errors', async () => {
+                assert.deepEqual(pageErrors, []);
+              });
+            } catch (error) {
+              results.push({ name: 'Complete desktop test sequence', status: 'FAIL', detail: error.stack });
+              console.error(error.stack);
+              if (page) await page.screenshot({ path: path.join(out, 'sequence-failure.png') }).catch(() => {});
+            } finally {
+              if (app) await app.close().catch(() => {});
+              await fs.writeFile(path.join(out, 'results.json'), JSON.stringify(results, null, 2));
+              const passed = results.filter(r => r.status === 'PASS').length;
+              const failed = results.filter(r => r.status === 'FAIL').length;
+              console.log('DESKTOP TEST SUMMARY: ' + passed + ' passed, ' + failed + ' failed');
+              if (process.env.GITHUB_STEP_SUMMARY) {
+                await fs.appendFile(process.env.GITHUB_STEP_SUMMARY, '\nDesktop checks: ' + passed + ' passed, ' + failed + ' failed.\n\n' + results.map(r => '- **' + r.status + '** ' + r.name + (r.detail ? ': ' + r.detail.split('\n')[0] : '')).join('\n') + '\n');
+              }
+              process.exitCode = failed ? 1 : 0;
+            }
+          })();
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP/engraving-browser/check.cjs" -Encoding utf8
+          node "$env:RUNNER_TEMP/engraving-browser/check.cjs"
+      - name: Upload Windows test evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: engraving-windows-test-evidence
+          path: test-artifacts
+          retention-days: 7
+          if-no-files-found: ignore
+      - name: Upload verified Windows installer
+        if: steps.tests.outcome == 'success' && steps.lint.outcome == 'success' && steps.desktop.outcome == 'success'
+        uses: actions/upload-artifact@v4
+        with:
+          name: Engraving-Prep-Tool-Windows-0.1.5
+          path: desktop-dist/*.exe
+          retention-days: 30
+          if-no-files-found: error
+      - name: Report Windows results
+        if: always()
+        env:
+          TEST_RESULT: ${{ steps.tests.outcome }}
+          BUILD_RESULT: ${{ steps.build.outcome }}
+          LINT_RESULT: ${{ steps.lint.outcome }}
+          INSTALLER_RESULT: ${{ steps.installer.outcome }}
+          DESKTOP_RESULT: ${{ steps.desktop.outcome }}
+        run: |
+          @"
+          | Windows check | Result |
+          | --- | --- |
+          | Unit tests | $env:TEST_RESULT |
+          | Installer build | $env:BUILD_RESULT |
+          | Lint | $env:LINT_RESULT |
+          | Installation | $env:INSTALLER_RESULT |
+          | Installed app UI | $env:DESKTOP_RESULT |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          if ($env:TEST_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:LINT_RESULT -ne 'success' -or $env:INSTALLER_RESULT -ne 'success' -or $env:DESKTOP_RESULT -ne 'success') { exit 1 }
