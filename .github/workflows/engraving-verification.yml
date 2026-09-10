@@ -1,4 +1,4 @@
-name: Engraving app verification
+name: Engraving app Windows verification
 on:
   push:
     branches:
@@ -7,8 +7,11 @@ permissions:
   contents: read
 jobs:
   verify:
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
+    runs-on: windows-latest
+    timeout-minutes: 20
+    defaults:
+      run:
+        shell: pwsh
     steps:
       - uses: actions/checkout@v4
         with:
@@ -16,35 +19,59 @@ jobs:
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
+      - name: Report Windows environment
+        run: |
+          Get-CimInstance Win32_OperatingSystem | Select-Object Caption, Version, OSArchitecture
+          node --version
       - name: Set up pnpm
         run: npm install --global pnpm@10
       - name: Install locked dependencies
         run: pnpm install --frozen-lockfile
-      - name: Run existing tests
+      - name: Run existing tests on Windows
         id: tests
         continue-on-error: true
         run: pnpm test
-      - name: Build production app
+      - name: Build Windows installer
         id: build
         continue-on-error: true
-        run: pnpm build
+        run: pnpm run build:installer
       - name: Run lint
         id: lint
         continue-on-error: true
         run: pnpm lint
-
-      - name: Prepare desktop browser testing
+      - name: Install app on disposable Windows runner
         if: steps.build.outcome == 'success'
-        run: |
-          npm install --prefix "$RUNNER_TEMP/engraving-browser" @playwright/test@1
-          node "$RUNNER_TEMP/engraving-browser/node_modules/playwright/cli.js" install-deps chromium
-          node node_modules/electron/install.js
-      - name: Exercise desktop app
-        if: steps.build.outcome == 'success'
-        id: desktop
+        id: installer
+        timeout-minutes: 3
         continue-on-error: true
         run: |
-          cat > "$RUNNER_TEMP/engraving-browser/check.cjs" <<'ENGRAVING_TEST_SCRIPT'
+          $installerFile = Get-ChildItem -LiteralPath 'desktop-dist' -Filter '*.exe' -File | Where-Object Name -NotLike '*uninstall*' | Select-Object -First 1
+          if (-not $installerFile) { throw 'Windows installer was not produced' }
+          $installDirectory = Join-Path $env:RUNNER_TEMP 'engraving-test-install'
+          $installProcess = Start-Process -FilePath $installerFile.FullName -ArgumentList @('/S', "/D=$installDirectory") -Wait -PassThru -WindowStyle Hidden
+          if ($installProcess.ExitCode -ne 0) { throw "Installer failed with exit code $($installProcess.ExitCode)" }
+          $installedExecutable = Join-Path $installDirectory 'Engraving Prep Tool.exe'
+          if (-not (Test-Path -LiteralPath $installedExecutable)) { throw "Installed executable was not found: $installedExecutable" }
+          "ENGRAVING_TEST_EXE=$installedExecutable" | Out-File -FilePath $env:GITHUB_ENV -Encoding utf8 -Append
+          New-Item -ItemType Directory -Path 'test-artifacts' -Force | Out-Null
+          @{
+            operatingSystem = (Get-CimInstance Win32_OperatingSystem).Caption
+            installer = $installerFile.Name
+            installerSha256 = (Get-FileHash -LiteralPath $installerFile.FullName -Algorithm SHA256).Hash
+            installedExecutable = $installedExecutable
+            installerExitCode = $installProcess.ExitCode
+          } | ConvertTo-Json | Set-Content -LiteralPath 'test-artifacts/installer-report.json'
+          Write-Output 'PASS: Windows installer completed and installed executable exists'
+      - name: Prepare Windows UI testing
+        if: steps.installer.outcome == 'success'
+        run: npm install --prefix "$env:RUNNER_TEMP/engraving-browser" @playwright/test@1
+      - name: Exercise installed Windows app
+        if: steps.installer.outcome == 'success'
+        id: desktop
+        timeout-minutes: 5
+        continue-on-error: true
+        run: |
+          @'
           const { _electron: electron, expect } = require('@playwright/test');
           const fs = require('node:fs/promises');
           const path = require('node:path');
@@ -71,8 +98,8 @@ jobs:
           }
           async function launch() {
             app = await electron.launch({
-              executablePath: path.resolve('node_modules/electron/dist/electron'),
-              args: ['--no-sandbox', '.'],
+              executablePath: process.env.ENGRAVING_TEST_EXE,
+              args: [],
               cwd: process.cwd(),
               acceptDownloads: true,
               timeout: 60000,
@@ -115,6 +142,8 @@ jobs:
           }
           (async () => {
             await fs.mkdir(out, { recursive: true });
+            assert.equal(process.platform, 'win32', 'These checks must run on Windows');
+            console.log('WINDOWS TEST ENVIRONMENT: ' + JSON.stringify({ platform: process.platform, architecture: process.arch, release: require('node:os').release(), executable: process.env.ENGRAVING_TEST_EXE }));
             try {
               await launch();
               firstOrigin = new URL(page.url()).origin;
@@ -271,25 +300,32 @@ jobs:
               process.exitCode = failed ? 1 : 0;
             }
           })();
-          
-          ENGRAVING_TEST_SCRIPT
-          xvfb-run -a node "$RUNNER_TEMP/engraving-browser/check.cjs"
-      - name: Upload desktop test evidence
+          '@ | Set-Content -LiteralPath "$env:RUNNER_TEMP/engraving-browser/check.cjs" -Encoding utf8
+          node "$env:RUNNER_TEMP/engraving-browser/check.cjs"
+      - name: Upload Windows test evidence
         if: always()
         uses: actions/upload-artifact@v4
         with:
-          name: engraving-desktop-test-evidence
+          name: engraving-windows-test-evidence
           path: test-artifacts
           retention-days: 7
           if-no-files-found: ignore
-
-      - name: Report results
+      - name: Report Windows results
         if: always()
         env:
           TEST_RESULT: ${{ steps.tests.outcome }}
           BUILD_RESULT: ${{ steps.build.outcome }}
           LINT_RESULT: ${{ steps.lint.outcome }}
+          INSTALLER_RESULT: ${{ steps.installer.outcome }}
           DESKTOP_RESULT: ${{ steps.desktop.outcome }}
         run: |
-          printf '| Check | Result |\n| --- | --- |\n| Tests | %s |\n| Build | %s |\n| Lint | %s |\n' "$TEST_RESULT" "$BUILD_RESULT" "$LINT_RESULT" >> "$GITHUB_STEP_SUMMARY"
-          test "$TEST_RESULT" = success && test "$BUILD_RESULT" = success && test "$LINT_RESULT" = success && test "$DESKTOP_RESULT" = success
+          @"
+          | Windows check | Result |
+          | --- | --- |
+          | Unit tests | $env:TEST_RESULT |
+          | Installer build | $env:BUILD_RESULT |
+          | Lint | $env:LINT_RESULT |
+          | Installation | $env:INSTALLER_RESULT |
+          | Installed app UI | $env:DESKTOP_RESULT |
+          "@ | Out-File -FilePath $env:GITHUB_STEP_SUMMARY -Encoding utf8 -Append
+          if ($env:TEST_RESULT -ne 'success' -or $env:BUILD_RESULT -ne 'success' -or $env:LINT_RESULT -ne 'success' -or $env:INSTALLER_RESULT -ne 'success' -or $env:DESKTOP_RESULT -ne 'success') { exit 1 }
