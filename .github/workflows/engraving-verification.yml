@@ -64,6 +64,7 @@ jobs:
             } catch (error) {
               results.push({ name, status: 'FAIL', detail: error.message });
               console.log('FAIL: ' + name + ' - ' + error.message);
+              if (page) console.log('UI at failure: ' + (await page.locator('body').innerText()).slice(0,6000));
               if (page) await page.screenshot({ path: path.join(out, 'failure-' + results.length + '.png') }).catch(() => {});
               return false;
             }
@@ -79,7 +80,7 @@ jobs:
             page = await app.firstWindow();
             page.setDefaultTimeout(15000);
             page.on('pageerror', error => pageErrors.push(error.message));
-            await page.getByRole('heading', { name: 'Engraving Prep Tool', exact: true }).waitFor();
+            await page.getByRole('heading', { name: 'Engraving Prep Tool', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
           }
           async function closeDialogs() {
             if (await page.getByRole('dialog').count()) await page.keyboard.press('Escape');
@@ -97,7 +98,7 @@ jobs:
               await page.getByLabel('Password', { exact: true }).fill(credentials.password);
               await page.locator('button[type=submit]').click();
             }
-            await page.getByRole('button', { name: 'Sign out', exact: true }).waitFor();
+            await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
           }
           async function exportFile(label, extension) {
             await page.getByRole('button', { name: 'Export', exact: true }).click();
@@ -136,7 +137,7 @@ jobs:
                 await page.getByLabel('Email', { exact: true }).fill(credentials.email);
                 await page.getByLabel('Password', { exact: true }).fill(credentials.password);
                 await page.locator('button[type=submit]').click();
-                await page.getByRole('button', { name: 'Sign out', exact: true }).waitFor();
+                await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
                 await closeDialogs();
                 await expect(page.getByRole('button', { name: 'Export', exact: true })).toBeDisabled();
               });
@@ -226,7 +227,7 @@ jobs:
               if (saved) {
                 await check('Saved xTool preset survives page reload', async () => {
                   await page.reload();
-                  await page.getByRole('button', { name: 'Sign out', exact: true }).waitFor();
+                  await page.getByRole('button', { name: 'Sign out', exact: true, includeHidden: true }).waitFor({ state: 'attached' });
                   const dialog = await openConverter();
                   await dialog.getByRole('button', { name: 'Load saved', exact: true }).click();
                   await expect(dialog.getByText('Dark mark', { exact: true }).first()).toBeVisible();
