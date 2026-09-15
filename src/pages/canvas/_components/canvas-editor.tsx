@@ -2288,11 +2288,33 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   ]);
 
   // Quick actions
+  /**
+   * Bounding box of the traced template, when the design is clipped to one.
+   *
+   * Fill targets this rather than the canvas. The canvas *is* the material, so
+   * covering it only looked like "filling the template" while the two happened
+   * to be the same size — which is why Fill swallowed the whole workspace the
+   * moment the canvas changed size.
+   */
+  const templateBounds = useMemo(() => {
+    if (!clipDesignToTrace || !penTraceClosed || penTracePoints.length < 3) return null;
+    const xs = penTracePoints.map((point) => point.x);
+    const ys = penTracePoints.map((point) => point.y);
+    const x = Math.min(...xs);
+    const y = Math.min(...ys);
+    const w = Math.max(...xs) - x;
+    const h = Math.max(...ys) - y;
+    if (w <= 0 || h <= 0) return null;
+    return { x, y, w, h };
+  }, [clipDesignToTrace, penTraceClosed, penTracePoints]);
+
   const handleFill = useCallback(() => {
     if (!design) return;
+    // Cover the traced template when there is one; the material otherwise.
+    const target = templateBounds ?? { x: 0, y: 0, w: displayWidth, h: displayHeight };
     const coverScale = Math.max(
-      displayWidth / design.naturalWidth,
-      displayHeight / design.naturalHeight
+      target.w / design.naturalWidth,
+      target.h / design.naturalHeight
     );
     const filledWidthIn = displayToInches(design.naturalWidth * coverScale, displayWidth, material.widthIn);
     const filledHeightIn = displayToInches(design.naturalHeight * coverScale, displayHeight, material.heightIn);
@@ -2301,8 +2323,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       scale: coverScale,
       scaleX: 1,
       scaleY: 1,
-      x: (displayWidth - design.naturalWidth * coverScale) / 2,
-      y: (displayHeight - design.naturalHeight * coverScale) / 2,
+      x: target.x + (target.w - design.naturalWidth * coverScale) / 2,
+      y: target.y + (target.h - design.naturalHeight * coverScale) / 2,
       rotation: 0,
     });
     if (unit === "in") {
@@ -2312,7 +2334,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       setDesignWidthInput(inToMm(filledWidthIn).toFixed(1));
       setDesignHeightInput(inToMm(filledHeightIn).toFixed(1));
     }
-  }, [design, displayWidth, displayHeight, material.heightIn, material.widthIn, unit]);
+  }, [design, displayWidth, displayHeight, material.heightIn, material.widthIn, templateBounds, unit]);
 
   const handleCenter = useCallback(() => {
     if (!design) return;
