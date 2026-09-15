@@ -2310,21 +2310,23 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const handleFill = useCallback(() => {
     if (!design) return;
-    // Cover the traced template when there is one; the material otherwise.
+    // Fit the whole artwork inside the template when there is one; the material
+    // otherwise. `min` rather than `max` contains the image: the entire artwork
+    // stays visible, letterboxed within the template instead of cropped to it.
     const target = templateBounds ?? { x: 0, y: 0, w: displayWidth, h: displayHeight };
-    const coverScale = Math.max(
+    const fitScale = Math.min(
       target.w / design.naturalWidth,
       target.h / design.naturalHeight
     );
-    const filledWidthIn = displayToInches(design.naturalWidth * coverScale, displayWidth, material.widthIn);
-    const filledHeightIn = displayToInches(design.naturalHeight * coverScale, displayHeight, material.heightIn);
+    const filledWidthIn = displayToInches(design.naturalWidth * fitScale, displayWidth, material.widthIn);
+    const filledHeightIn = displayToInches(design.naturalHeight * fitScale, displayHeight, material.heightIn);
     setDesign({
       ...design,
-      scale: coverScale,
+      scale: fitScale,
       scaleX: 1,
       scaleY: 1,
-      x: target.x + (target.w - design.naturalWidth * coverScale) / 2,
-      y: target.y + (target.h - design.naturalHeight * coverScale) / 2,
+      x: target.x + (target.w - design.naturalWidth * fitScale) / 2,
+      y: target.y + (target.h - design.naturalHeight * fitScale) / 2,
       rotation: 0,
     });
     if (unit === "in") {
