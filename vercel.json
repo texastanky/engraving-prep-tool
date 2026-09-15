@@ -25,6 +25,18 @@
   ],
   "rewrites": [
     {
+      "source": "/terms",
+      "destination": "/terms.html"
+    },
+    {
+      "source": "/privacy",
+      "destination": "/privacy.html"
+    },
+    {
+      "source": "/refunds",
+      "destination": "/refunds.html"
+    },
+    {
       "source": "/((?!update\\.json).*)",
       "destination": "/index.html"
     }

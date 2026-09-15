@@ -1,4 +1,5 @@
 import { requireAuth } from "../server/auth.js";
+import { consumeAiCall, getAccountPlan } from "../server/licensing.js";
 
 export const config = {
   api: {
@@ -91,7 +92,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!requireAuth(req, res)) return;
+  const user = requireAuth(req, res);
+  if (!user) return;
 
   const body = readBody(req);
   const serializedLength = JSON.stringify(body).length;
@@ -104,6 +106,15 @@ export default async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     res.status(503).json({ error: "missing_configuration" });
+    return;
+  }
+
+  // Per-user quota: image generation is the most expensive call in the app, so
+  // it is counted before it is spent. The plan comes from the account.
+  const plan = await getAccountPlan(user.id);
+  const quota = await consumeAiCall({ userId: user.id, plan });
+  if (!quota.allowed) {
+    res.status(429).json({ error: "quota_exceeded", limit: quota.limit, remaining: 0 });
     return;
   }
 

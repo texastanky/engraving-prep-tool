@@ -127,7 +127,12 @@ function AuthenticatedAccountGate({ children }: { children: ReactNode }) {
     return (
       <>
         {children}
-        <div className="fixed right-4 top-16 z-[70] flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-md border border-border bg-card/95 px-3 py-2 text-xs text-muted-foreground shadow-xl backdrop-blur">
+        {/* Kept out of the top-right corner: the header's Import and Export menus
+            open into that area, and this chip sat above them (z-70 against the
+            popper's z-50), covering the menu items. It now sits low on the right,
+            clear of both the toolbar and the corner button, and *below* menus in
+            the stacking order so it can never cover one again. */}
+        <div className="fixed bottom-20 right-4 z-40 flex max-w-[calc(100vw-2rem)] items-center gap-2 rounded-md border border-border bg-card/95 px-2.5 py-1.5 text-[11px] text-muted-foreground shadow-lg backdrop-blur">
           <ShieldCheck className="size-3.5 text-primary" />
           <span className="truncate">{auth.user.email}</span>
           <Button className="h-6 px-2 text-[10px]" size="xs" variant="secondary" onClick={handleLogout}>

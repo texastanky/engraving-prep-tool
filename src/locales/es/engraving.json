@@ -7,7 +7,6 @@
   "gate.unlocking": "Desbloqueando…",
   "gate.error.wrong": "Contraseña incorrecta.",
   "gate.error.generic": "Algo salió mal. Por favor intenta de nuevo.",
-
   "ai.title": "Asistente de Grabado",
   "ai.powered": "Con tecnología de IA",
   "ai.greeting": "¡Hola! Soy tu asistente de grabado. Pregúntame sobre configuraciones del láser, requisitos de la NFA, preparación de materiales o posicionamiento del diseño.",
@@ -22,7 +21,6 @@
   "ai.suggest.2": "¿Requisitos de grabado de la NFA?",
   "ai.suggest.3": "¿Qué tan profundo debo grabar?",
   "ai.suggest.4": "¿Detectar y llenar el área láser?",
-
   "engraveAi.title": "IA de Grabado",
   "engraveAi.noPhoto": "Sube primero una foto de la pieza.",
   "engraveAi.detect": "Detectar Contorno",
@@ -36,7 +34,6 @@
   "engraveAi.confidence": "Confianza {{value}}%",
   "engraveAi.coverage": "Cobertura {{value}}%",
   "engraveAi.noResult": "No se detectó contorno. Recorta mejor la foto o sube la tolerancia de fondo.",
-
   "aiCompose.title": "Compositor de Imágenes IA",
   "aiCompose.template": "Plantilla",
   "aiCompose.artwork": "Arte",
@@ -66,7 +63,6 @@
   "aiCompose.error.currentDesign": "No se pudo cargar el diseño actual como plantilla.",
   "aiCompose.error.apiUnavailable": "La API de imagen IA no está disponible desde este servidor local.",
   "aiCompose.error.generic": "No se pudo generar la imagen.",
-
   "crop.title": "Recortar Diseño",
   "crop.titleImage": "Recortar Imagen del Diseño",
   "crop.partTitle": "Recortar Foto de la Pieza",
@@ -75,9 +71,8 @@
   "crop.cancel": "Cancelar",
   "crop.hint": "Arrastra los controles para definir el área de recorte. El recorte no es destructivo — puedes deshacerlo después de aplicarlo.",
   "crop.loading": "Cargando imagen…",
-
   "editor.title": "Herramienta de Grabado",
-  "editor.tagline": "por Pete's Guns & Stuff",
+  "editor.tagline": "por ForgeMark Industries",
   "editor.pro": "PRO",
   "editor.upgrade": "Mejorar",
   "editor.export": "Exportar",
@@ -98,10 +93,8 @@
   "editor.warp.cornerBr": "Esquina inferior derecha",
   "editor.warp.pinTitle": "Arrastra para dar forma · Clic derecho para eliminar",
   "editor.warp.localPinTitle": "Arrastra para mover esta área · Clic derecho para eliminar",
-
   "common.optional": "(opcional)",
   "common.reset": "Restablecer",
-
   "panel.partPhoto": "Foto de la Pieza",
   "panel.partPhoto.upload": "Subir Foto de la Pieza",
   "panel.partPhoto.replace": "Reemplazar Foto",
@@ -114,7 +107,6 @@
   "panel.partPhoto.snapStraight": "Enderezar",
   "panel.partPhoto.crop": "Recortar Foto",
   "panel.partPhoto.cropPhoto": "Recortar Foto",
-
   "panel.design": "Diseño / Logo",
   "panel.design.heading": "Diseño de Grabado",
   "panel.design.upload": "Subir Diseño",
@@ -151,26 +143,21 @@
   "panel.design.grayscale": "Escala de Grises",
   "panel.design.invert": "Invertir",
   "panel.design.resetAdjustments": "Restablecer",
-
   "panel.adjust.heading": "Ajustar Diseño",
   "panel.adjust.tabSize": "Tamaño y Posición",
   "panel.adjust.tabImage": "Imagen",
   "panel.adjust.setExactSize": "Definir Tamaño Exacto",
   "panel.adjust.sizeHelper": "Ingresa el ancho para escalar proporcionalmente, o ambos para estirar",
-
   "panel.image.helper": "Ajusta la imagen del diseño para mejores resultados de grabado. El alto contraste y la escala de grises funcionan mejor para la mayoría de los láseres.",
   "panel.image.engraveReady": "Listo para Grabar",
   "panel.image.invertDark": "Invertir Oscuro",
   "panel.image.invertColors": "Invertir Colores",
   "panel.image.resetAll": "Restablecer Todos los Ajustes",
-
   "panel.shortcuts.title": "Atajos de Teclado",
   "panel.shortcuts.rotate": "Rotar 15°",
   "panel.shortcuts.scale": "Escalar",
   "panel.shortcuts.nudge": "Mover 2px",
-
   "panel.trace.title": "Trazar y Vectorizar",
-
   "panel.penTrace.title": "Trazo con Pluma",
   "panel.penTrace.start": "Trazar",
   "panel.penTrace.done": "Listo",
@@ -192,21 +179,32 @@
   "panel.penTrace.savedParts": "Piezas trazadas guardadas",
   "panel.penTrace.deleteSavedPart": "Eliminar {{name}}",
   "panel.penTrace.helper": "{{count}} puntos. Haz clic alrededor del borde de la pieza, arrastra puntos para ajustar, luego cierra o exporta.",
-
   "panel.warp.title": "Distorsión Libre",
   "panel.warp.active": "Activo",
   "panel.warp.enable": "Deformar / Puntos",
   "panel.warp.done": "Listo",
   "panel.warp.reset": "Restablecer",
   "panel.warp.hint": "Haz clic dentro del arte para agregar un punto azul de deformación local. Arrastra puntos azules para mover esa área. Haz clic en un borde para agregar un pin de borde. Clic derecho en un punto o diamante para eliminarlo.",
-
   "panel.eraser.title": "Borrador",
   "panel.eraser.eraser": "Borrador",
   "panel.eraser.erasing": "Borrando",
   "panel.eraser.size": "Tamaño del pincel",
   "panel.eraser.clear": "Limpiar",
   "panel.eraser.clearAll": "Limpiar Todo",
-
+  "panel.mask.tab": "Máscara",
+  "panel.mask.hint": "Recorta el arte dentro de una forma, como una máscara de recorte o PowerClip. La imagen original no se modifica: mueve o cambia el tamaño de la forma cuando quieras.",
+  "panel.mask.none": "Elige una forma arriba para recortar el diseño dentro de ella.",
+  "panel.mask.active": "Recortado",
+  "panel.mask.lockAspect": "Bloquear proporción",
+  "panel.mask.cornerRadius": "Radio de esquina",
+  "panel.mask.feather": "Borde suave",
+  "panel.mask.rotation": "Ángulo",
+  "panel.mask.invert": "Invertir (mantener exterior)",
+  "panel.mask.fitDesign": "Ajustar al arte",
+  "panel.mask.fitMaterial": "Ajustar al material",
+  "panel.mask.center": "Centrar",
+  "panel.mask.remove": "Quitar máscara",
+  "panel.mask.dragHint": "Arrastra los tiradores cian para cambiar el tamaño, o la etiqueta cian para mover la forma. Todo lo que queda fuera de la forma se oculta sin borrarse.",
   "panel.material": "Tamaño del Material",
   "panel.material.width": "Ancho",
   "panel.material.height": "Alto",
@@ -217,14 +215,12 @@
   "panel.material.presets": "Preajustes",
   "panel.material.pickPlaceholder": "Elige un material...",
   "panel.material.canvasRepresents": "El lienzo representa: {{w}} × {{h}}",
-
   "panel.templates": "Plantillas",
   "panel.templates.heading": "Mis Plantillas",
   "panel.templates.search": "Buscar plantillas…",
   "panel.templates.all": "Todas",
   "panel.templates.load": "Cargar →",
   "panel.templates.helper": "Haz clic en una plantilla para cargarla como tu diseño",
-
   "canvas.dropHint": "Arrastra imágenes aquí o usa la barra lateral",
   "canvas.dropActive": "Suelta la imagen aquí",
   "canvas.addDesignHint": "Foto de la pieza → luego tu diseño",
@@ -234,7 +230,6 @@
   "canvas.penTraceHint": "Clic para agregar puntos • Arrastra puntos para ajustar • Enter cierra • Esc sale",
   "canvas.resizeHint": "Shift+arrastra esquina = proporcional",
   "canvas.loading": "Cargando…",
-
   "toast.exportLimit": "Límite de exportación alcanzado",
   "toast.exportLimitDesc": "Ya usaste tus 3 exportaciones gratuitas este mes.",
   "toast.exportFail": "Error al exportar",

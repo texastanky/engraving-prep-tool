@@ -94,6 +94,7 @@ function adaptResponse(res: ServerResponse): LocalApiResponse {
 function localApiPlugin(): Plugin {
   const routes = new Map([
     ["/api/auth", "auth.js"],
+    ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
   ]);
@@ -132,7 +133,7 @@ const packageJson = JSON.parse(
 
 const appVersion = packageJson.version ?? "0.0.0";
 const updateManifestUrl =
-  process.env.VITE_UPDATE_MANIFEST_URL?.trim() || "https://engraving-prep-tool.vercel.app/update.json";
+  process.env.VITE_UPDATE_MANIFEST_URL?.trim() || "https://forgemarkindustries.com/update.json";
 
 // https://vite.dev/config/
 export default defineConfig({

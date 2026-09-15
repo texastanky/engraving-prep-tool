@@ -90,7 +90,7 @@ export function resolveUpdateManifestUrl(
 export function getAvailableUpdate(
   manifest: UpdateManifest,
   currentVersion = APP_VERSION,
-  baseUrl = globalThis.location?.href ?? "https://engraving-prep-tool.vercel.app/",
+  baseUrl = globalThis.location?.href ?? "https://forgemarkindustries.com/",
 ): AvailableUpdate | null {
   const latestVersion = stringValue(manifest.latestVersion) ?? stringValue(manifest.version);
   if (!latestVersion || compareVersions(latestVersion, currentVersion) <= 0) return null;

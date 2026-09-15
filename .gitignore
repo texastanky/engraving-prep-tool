@@ -35,3 +35,6 @@ tsconfig.tsbuildinfo
 
 # Local account store
 .data/
+
+# Packaging output when building to a non-default directory
+/installer-out

@@ -7,7 +7,6 @@
   "gate.unlocking": "Unlocking…",
   "gate.error.wrong": "Incorrect password.",
   "gate.error.generic": "Something went wrong. Please try again.",
-
   "ai.title": "Engraving Assistant",
   "ai.powered": "Powered by AI",
   "ai.greeting": "Hey! I'm your engraving assistant. Ask me about laser settings, NFA requirements, material prep, or design placement.",
@@ -22,7 +21,6 @@
   "ai.suggest.2": "NFA engraving requirements?",
   "ai.suggest.3": "How deep should I engrave?",
   "ai.suggest.4": "Detect and fill the laser area?",
-
   "engraveAi.title": "Engrave AI",
   "engraveAi.noPhoto": "Upload a part photo first.",
   "engraveAi.detect": "Detect Outline",
@@ -36,7 +34,6 @@
   "engraveAi.confidence": "Confidence {{value}}%",
   "engraveAi.coverage": "Coverage {{value}}%",
   "engraveAi.noResult": "No outline detected. Crop the photo tighter or raise background tolerance.",
-
   "aiCompose.title": "AI Image Composer",
   "aiCompose.template": "Template",
   "aiCompose.artwork": "Art",
@@ -66,7 +63,6 @@
   "aiCompose.error.currentDesign": "Could not load the current design as a template.",
   "aiCompose.error.apiUnavailable": "AI image API is not available from this local server.",
   "aiCompose.error.generic": "Could not generate image.",
-
   "crop.title": "Crop Design",
   "crop.titleImage": "Crop Design Image",
   "crop.partTitle": "Crop Part Photo",
@@ -75,9 +71,8 @@
   "crop.cancel": "Cancel",
   "crop.hint": "Drag the handles to set your crop area. The crop is non-destructive — you can undo it after applying.",
   "crop.loading": "Loading image…",
-
   "editor.title": "Engraving Prep Tool",
-  "editor.tagline": "by Pete's Guns & Stuff",
+  "editor.tagline": "by ForgeMark Industries",
   "editor.pro": "PRO",
   "editor.upgrade": "Upgrade",
   "editor.export": "Export",
@@ -99,10 +94,8 @@
   "editor.warp.cornerBr": "Bottom-right corner",
   "editor.warp.pinTitle": "Drag to reshape · Right-click to remove",
   "editor.warp.localPinTitle": "Drag to pull this area · Right-click to remove",
-
   "common.optional": "(optional)",
   "common.reset": "Reset",
-
   "panel.partPhoto": "Part Photo",
   "panel.partPhoto.upload": "Upload Part Photo",
   "panel.partPhoto.replace": "Replace Photo",
@@ -115,7 +108,6 @@
   "panel.partPhoto.snapStraight": "Snap Straight",
   "panel.partPhoto.crop": "Crop Part Photo",
   "panel.partPhoto.cropPhoto": "Crop Photo",
-
   "panel.design": "Design / Logo",
   "panel.design.heading": "Engraving Design",
   "panel.design.upload": "Upload Design",
@@ -152,26 +144,21 @@
   "panel.design.grayscale": "Grayscale",
   "panel.design.invert": "Invert",
   "panel.design.resetAdjustments": "Reset",
-
   "panel.adjust.heading": "Adjust Design",
   "panel.adjust.tabSize": "Size & Position",
   "panel.adjust.tabImage": "Image",
   "panel.adjust.setExactSize": "Set Exact Size",
   "panel.adjust.sizeHelper": "Enter width to scale proportionally, or both to stretch",
-
   "panel.image.helper": "Adjust the design image for better engraving results. High contrast and grayscale work best for most lasers.",
   "panel.image.engraveReady": "Engrave Ready",
   "panel.image.invertDark": "Invert Dark",
   "panel.image.invertColors": "Invert Colors",
   "panel.image.resetAll": "Reset All Adjustments",
-
   "panel.shortcuts.title": "Keyboard Shortcuts",
   "panel.shortcuts.rotate": "Rotate 15°",
   "panel.shortcuts.scale": "Scale",
   "panel.shortcuts.nudge": "Nudge 2px",
-
   "panel.trace.title": "Trace & Vectorize",
-
   "panel.penTrace.title": "Pen Trace",
   "panel.penTrace.start": "Trace",
   "panel.penTrace.done": "Done",
@@ -193,21 +180,32 @@
   "panel.penTrace.savedParts": "Saved traced parts",
   "panel.penTrace.deleteSavedPart": "Delete {{name}}",
   "panel.penTrace.helper": "{{count}} points. Click around the part edge, drag points to adjust, then close or export.",
-
   "panel.warp.title": "Free Distort",
   "panel.warp.active": "Active",
   "panel.warp.enable": "Warp / Dots",
   "panel.warp.done": "Done",
   "panel.warp.reset": "Reset",
   "panel.warp.hint": "Click inside the art to add a blue local warp dot. Drag blue dots to pull that area. Click an edge to add an edge pin. Right-click a dot or diamond to remove it.",
-
   "panel.eraser.title": "Eraser Tool",
   "panel.eraser.eraser": "Eraser",
   "panel.eraser.erasing": "Erasing",
   "panel.eraser.size": "Brush size",
   "panel.eraser.clear": "Clear",
   "panel.eraser.clearAll": "Clear All",
-
+  "panel.mask.tab": "Mask",
+  "panel.mask.hint": "Clip the art into a shape, like a clipping mask or PowerClip. The artwork itself is not changed — move or resize the shape any time.",
+  "panel.mask.none": "Pick a shape above to clip the design into it.",
+  "panel.mask.active": "Clipped",
+  "panel.mask.lockAspect": "Lock aspect ratio",
+  "panel.mask.cornerRadius": "Corner radius",
+  "panel.mask.feather": "Soft edge",
+  "panel.mask.rotation": "Angle",
+  "panel.mask.invert": "Invert (keep outside)",
+  "panel.mask.fitDesign": "Fit to art",
+  "panel.mask.fitMaterial": "Fit to material",
+  "panel.mask.center": "Center",
+  "panel.mask.remove": "Remove mask",
+  "panel.mask.dragHint": "Drag the cyan handles to resize, or the cyan tag to move the shape. Everything outside the shape is hidden without being deleted.",
   "panel.material": "Material Size",
   "panel.material.width": "Width",
   "panel.material.height": "Height",
@@ -218,14 +216,12 @@
   "panel.material.presets": "Presets",
   "panel.material.pickPlaceholder": "Pick a material...",
   "panel.material.canvasRepresents": "Canvas represents: {{w}} × {{h}}",
-
   "panel.templates": "Templates",
   "panel.templates.heading": "My Templates",
   "panel.templates.search": "Search templates…",
   "panel.templates.all": "All",
   "panel.templates.load": "Load →",
   "panel.templates.helper": "Click a template to load it as your design",
-
   "canvas.dropHint": "Drop images here or use the sidebar",
   "canvas.dropActive": "Drop image here",
   "canvas.addDesignHint": "Part photo → then your design",
@@ -235,7 +231,6 @@
   "canvas.penTraceHint": "Click to add points • Drag dots to adjust • Enter closes • Esc exits",
   "canvas.resizeHint": "Shift+drag corner = proportional",
   "canvas.loading": "Loading…",
-
   "toast.exportLimit": "Export limit reached",
   "toast.exportLimitDesc": "You've used your 3 free exports this month.",
   "toast.exportFail": "Export failed",

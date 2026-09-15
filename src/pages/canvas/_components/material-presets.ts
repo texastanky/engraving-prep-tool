@@ -1,4 +1,34 @@
+/**
+ * The machine's work area, and common part blanks.
+ *
+ * The bed entries matter more than they look: they set the canvas to the laser's
+ * real work area, so artwork sits on screen at the size it will actually be
+ * marked. A 7.5 in slide then covers 7.5 in of the bed rather than being
+ * stretched to fill the view, which is what makes the on-screen proof worth
+ * trusting before a part goes under the head.
+ *
+ * Defaults are the xTool F2 Ultra: 220 × 220 mm, expanding to 220 × 500 mm with
+ * the Auto Streamline conveyor. Values are held in inches because that is the
+ * unit the canvas maths works in; the names carry the millimetres.
+ */
+export const F2_ULTRA_BED_IN = { width: 220 / 25.4, height: 220 / 25.4 } as const;
+export const F2_ULTRA_CONVEYOR_IN = { width: 220 / 25.4, height: 500 / 25.4 } as const;
+
 export const MATERIAL_PRESETS = [
+  {
+    id: "f2-ultra-bed",
+    name: "xTool F2 Ultra bed — 220 × 220 mm",
+    width: F2_ULTRA_BED_IN.width,
+    height: F2_ULTRA_BED_IN.height,
+    unit: "in" as const,
+  },
+  {
+    id: "f2-ultra-conveyor",
+    name: "xTool F2 Ultra + conveyor — 220 × 500 mm",
+    width: F2_ULTRA_CONVEYOR_IN.width,
+    height: F2_ULTRA_CONVEYOR_IN.height,
+    unit: "in" as const,
+  },
   {
     id: "ar-lower",
     name: "AR Lower Receiver",

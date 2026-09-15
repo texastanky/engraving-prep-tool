@@ -22,7 +22,35 @@ const mimeTypes = {
   ".woff2": "font/woff2",
 };
 
+/**
+ * In development only, pick up .env.local the way the dev server does, so the
+ * owner account, licence secret and API keys set there apply to the desktop app
+ * too. Skipped entirely in a packaged build, so nothing sensitive ships.
+ */
+function loadLocalEnvFile() {
+  if (app.isPackaged) return;
+  const envPath = path.join(__dirname, "..", ".env.local");
+  let raw;
+  try {
+    raw = fs.readFileSync(envPath, "utf8");
+  } catch {
+    return;
+  }
+
+  for (const line of raw.split(/\r?\n/)) {
+    const trimmed = line.trim();
+    if (!trimmed || trimmed.startsWith("#")) continue;
+    const separator = trimmed.indexOf("=");
+    if (separator === -1) continue;
+    const key = trimmed.slice(0, separator).trim();
+    const value = trimmed.slice(separator + 1).trim();
+    if (key && !process.env[key]) process.env[key] = value;
+  }
+}
+
 async function ensureDesktopAuthEnv() {
+  loadLocalEnvFile();
+
   const userData = app.getPath("userData");
   await fsp.mkdir(userData, { recursive: true });
 
@@ -126,8 +154,12 @@ function serveStatic(req, res) {
 async function startBundledServer() {
   await ensureDesktopAuthEnv();
 
+  // Keep this in step with the localApiPlugin routes in vite.config.ts: anything
+  // missing here silently falls through to the static handler in the packaged
+  // app, which looks like the feature doing nothing.
   const routes = new Map([
     ["/api/auth", "auth.js"],
+    ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
   ]);
@@ -168,10 +200,14 @@ async function startBundledServer() {
 
 function createWindow(startUrl) {
   const window = new BrowserWindow({
-    width: 1280,
-    height: 860,
-    minWidth: 1000,
-    minHeight: 680,
+    // Sized so the app fits a scaled desktop. At 200% display scaling a 1920 px
+    // screen is only ~960 CSS px wide, so the old 1280 x 860 default (and its
+    // 1000 px minimum) could not fit on screen — the window was clamped and the
+    // workspace was left cramped. 720 x 560 minimum still fits that desktop.
+    width: 1200,
+    height: 800,
+    minWidth: 720,
+    minHeight: 560,
     title: "Engraving Prep Tool",
     autoHideMenuBar: true,
     backgroundColor: "#0d1117",
@@ -182,7 +218,10 @@ function createWindow(startUrl) {
     },
   });
 
-  window.loadURL(`${startUrl}/canvas?desktop=1#xtool-settings`);
+  // No `#xtool-settings` here: that hash auto-opened the xTool Settings Converter
+  // dialog on every launch, in front of the canvas. The converter has its own
+  // card in the sidebar, and the hash still works as a deep link when wanted.
+  window.loadURL(`${startUrl}/canvas?desktop=1`);
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);

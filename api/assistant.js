@@ -1,4 +1,5 @@
 import { requireAuth } from "../server/auth.js";
+import { consumeAiCall, getAccountPlan } from "../server/licensing.js";
 
 const MAX_REQUEST_CHARS = 11_000_000;
 const MAX_IMAGE_DATA_URL_CHARS = 4_000_000;
@@ -170,7 +171,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  if (!requireAuth(req, res)) return;
+  const user = requireAuth(req, res);
+  if (!user) return;
 
   const body = readBody(req);
   const messages = normalizeMessages(body.messages);
@@ -192,6 +194,16 @@ export default async function handler(req, res) {
   const apiKey = process.env.OPENAI_API_KEY;
   if (!apiKey) {
     res.status(503).json({ error: "missing_configuration" });
+    return;
+  }
+
+  // Per-user quota. The provider key is ours, so every request is counted before
+  // it is spent; a denied request does not consume quota. The plan comes from the
+  // account, not from the client.
+  const plan = await getAccountPlan(user.id);
+  const quota = await consumeAiCall({ userId: user.id, plan });
+  if (!quota.allowed) {
+    res.status(429).json({ error: "quota_exceeded", limit: quota.limit, remaining: 0 });
     return;
   }
 
