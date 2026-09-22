@@ -4009,7 +4009,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const referencePanels = (
     <>
                   <XtoolSettingsConverterPanel />
-                  {/* Templates — collapsible */}
+                  {/* Templates — hidden entirely while the list is empty.
+                      It is now deliberately empty: the previous contents were licensed
+                      third-party design files that should not ship inside a product.
+                      Add your own to `templates.ts` and this card reappears. */}
+                  {ENGRAVING_TEMPLATES.length > 0 && (
                   <div className="rounded-lg border border-border bg-card overflow-hidden">
                     <button
                       className="w-full flex items-center justify-between gap-2 px-4 py-3 hover:bg-secondary/50 transition-colors cursor-pointer"
@@ -4080,6 +4084,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       </div>
                     )}
                   </div>
+                  )}
 
                   <AiComposePanel
                     currentDesignSrc={designSrc}
