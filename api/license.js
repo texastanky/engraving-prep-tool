@@ -86,11 +86,21 @@ export default async function handler(req, res) {
     // the account, so a client cannot influence them.
     await setAccountPlan(user.id, result.plan);
 
-    const entitlement = signEntitlement({
-      sub: user.id,
-      plan: result.plan,
-      expiresAt: result.expiresAt,
-    });
+    // The cached offline token is HMAC-signed with the shared secret, which a
+    // shipped build deliberately does not carry. PGS2 keys verify against a
+    // public key and need no secret, so activation must succeed without one —
+    // the plan is already recorded server-side and that is the real truth.
+    // Failing here made every activation return desktop_api_unavailable.
+    let entitlement = null;
+    try {
+      entitlement = signEntitlement({
+        sub: user.id,
+        plan: result.plan,
+        expiresAt: result.expiresAt,
+      });
+    } catch {
+      entitlement = null;
+    }
 
     const usage = await getUsage(user.id, now);
     res.status(200).json({
@@ -98,7 +108,7 @@ export default async function handler(req, res) {
       // When the licence itself ends, and when the cached entitlement must be
       // refreshed (which also bounds offline use).
       planExpiresAt: result.expiresAt ?? null,
-      entitlementExpiresAt: entitlementExpiry(entitlement),
+      entitlementExpiresAt: entitlement ? entitlementExpiry(entitlement) : null,
       ...statusPayload(user.id, result.plan, usage),
     });
     return;

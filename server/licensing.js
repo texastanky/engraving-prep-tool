@@ -16,6 +16,10 @@ import crypto from "node:crypto";
 import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+/** Directory holding this module, which works inside app.asar too. */
+const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
 
 const STORE_FILE = path.resolve(process.env.LICENSE_STORE_FILE || ".data/licensing.json");
 
@@ -99,12 +103,26 @@ let cachedPublicKey;
 function getPublicKey() {
   if (cachedPublicKey !== undefined) return cachedPublicKey;
   cachedPublicKey = null;
-  const file = process.env.LICENSE_PUBLIC_KEY_FILE || path.resolve("server/license-public.pem");
-  try {
-    cachedPublicKey = crypto.createPublicKey(readFileSync(file, "utf8"));
-  } catch {
-    cachedPublicKey = null;
+
+  // Resolve next to THIS MODULE, not against the working directory. In the
+  // packaged app the file ships inside app.asar, so a cwd-relative path would
+  // silently never match and every PGS2 key would report "not configured".
+  // The cwd candidate is kept as a fallback for unusual layouts.
+  const candidates = [];
+  if (process.env.LICENSE_PUBLIC_KEY_FILE) candidates.push(process.env.LICENSE_PUBLIC_KEY_FILE);
+  candidates.push(path.join(MODULE_DIR, "license-public.pem"));
+  candidates.push(path.resolve("server/license-public.pem"));
+
+  for (const file of candidates) {
+    try {
+      cachedPublicKey = crypto.createPublicKey(readFileSync(file, "utf8"));
+      return cachedPublicKey;
+    } catch {
+      // try the next location
+    }
   }
+
+  cachedPublicKey = null;
   return cachedPublicKey;
 }
 
