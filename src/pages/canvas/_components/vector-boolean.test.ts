@@ -125,7 +125,11 @@ describe("offsetSubpaths", () => {
     expect(subpathsArea(offsetSubpaths(withHole, 5))).toBeGreaterThan(subpathsArea(withHole));
   });
 
-  it("offsets a circle outward into a circle", () => {
+  // Offsetting a circle tessellates into a great many segments, so this is
+  // genuinely heavy geometry: 3-8s depending on machine load. It tripped
+  // vitest's 5s default and failed as a timeout, which looks like a real
+  // failure but is not one. Give it room rather than leave a flaky red test.
+  it("offsets a circle outward into a circle", { timeout: 30000 }, () => {
     const grown = offsetSubpaths(ellipseSubpaths(0, 0, 50, 50), 10, 0.1);
     for (const subpath of grown) {
       for (const anchor of subpath.anchors) {
