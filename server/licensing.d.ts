@@ -47,7 +47,7 @@ export function issueLicenseKey(
 
 export function verifyLicenseKey(
   key: unknown,
-  options?: { now?: Date; secret?: string | null }
+  options?: { now?: Date; secret?: string | null; publicKey?: unknown | null }
 ): LicenseVerifyResult;
 
 export function signEntitlement(

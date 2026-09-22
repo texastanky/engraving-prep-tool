@@ -13,12 +13,27 @@
  */
 
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
 import fs from "node:fs/promises";
 import path from "node:path";
 
 const STORE_FILE = path.resolve(process.env.LICENSE_STORE_FILE || ".data/licensing.json");
 
 export const LICENSE_PREFIX = "PGS1";
+
+/**
+ * Asymmetric licence keys.
+ *
+ * PGS1 (above) is HMAC-signed with a shared secret. Verifying an HMAC requires
+ * the same secret that signs it, so a shipped app would have to carry the
+ * signing secret — and anyone who unpacked it could mint their own keys. That
+ * makes PGS1 fine for development and unusable for customers.
+ *
+ * PGS2 is signed with a private key that never leaves the issuer, and verified
+ * with a public key the app can safely carry. A key cannot then be forged or
+ * edited into existence, including by editing the local licence store.
+ */
+export const LICENSE_PREFIX_V2 = "PGS2";
 
 export const PLANS = {
   free: { label: "Free", exportsPerMonth: 5, aiPerDay: 5 },
@@ -69,6 +84,44 @@ function timingSafeEqual(a, b) {
   return crypto.timingSafeEqual(left, right);
 }
 
+let cachedPublicKey;
+
+/**
+ * The public key PGS2 licences are verified against.
+ *
+ * Read from LICENSE_PUBLIC_KEY_FILE, or from server/license-public.pem shipped
+ * beside the app. It is public by design — publishing it is safe, which is the
+ * entire reason for using asymmetric keys.
+ *
+ * Returns null when absent, so the app falls back to the free tier rather than
+ * failing open.
+ */
+function getPublicKey() {
+  if (cachedPublicKey !== undefined) return cachedPublicKey;
+  cachedPublicKey = null;
+  const file = process.env.LICENSE_PUBLIC_KEY_FILE || path.resolve("server/license-public.pem");
+  try {
+    cachedPublicKey = crypto.createPublicKey(readFileSync(file, "utf8"));
+  } catch {
+    cachedPublicKey = null;
+  }
+  return cachedPublicKey;
+}
+
+function verifyAsymmetric(payload, signature, publicKey) {
+  try {
+    const key = typeof publicKey === "string" ? crypto.createPublicKey(publicKey) : publicKey;
+    return crypto.verify(
+      null,
+      Buffer.from(payload),
+      key,
+      Buffer.from(String(signature), "base64url")
+    );
+  } catch {
+    return false;
+  }
+}
+
 /**
  * Issue a licence key. Format: PGS1.<payload>.<signature>, where payload is
  * base64url JSON. Only the seller needs this; it runs with LICENSE_SECRET set.
@@ -83,15 +136,31 @@ export function issueLicenseKey({ sub, plan = "pro", expiresAt = null }, secret 
 }
 
 /** Verify a licence key. Never throws: returns { ok: false, reason }. */
-export function verifyLicenseKey(key, { now = new Date(), secret = getSecret() } = {}) {
-  if (!secret) return { ok: false, reason: "licensing_not_configured" };
+export function verifyLicenseKey(key, { now = new Date(), secret = getSecret(), publicKey } = {}) {
   if (typeof key !== "string") return { ok: false, reason: "missing_key" };
 
   const parts = key.trim().split(".");
-  if (parts.length !== 3 || parts[0] !== LICENSE_PREFIX) return { ok: false, reason: "malformed_key" };
+  if (parts.length !== 3) return { ok: false, reason: "malformed_key" };
 
-  const [, payload, signature] = parts;
-  if (!timingSafeEqual(sign(payload, secret), signature)) return { ok: false, reason: "bad_signature" };
+  const [prefix, payload, signature] = parts;
+
+  if (prefix === LICENSE_PREFIX_V2) {
+    // Asymmetric: needs only the public key, so this works in a shipped build
+    // with no secret configured. `publicKey: null` means "deliberately none".
+    const resolved = publicKey === undefined ? getPublicKey() : publicKey;
+    if (!resolved) return { ok: false, reason: "licensing_not_configured" };
+    if (!verifyAsymmetric(payload, signature, resolved)) {
+      return { ok: false, reason: "bad_signature" };
+    }
+  } else if (prefix === LICENSE_PREFIX) {
+    // Legacy symmetric path, kept so existing local development keys still work.
+    if (!secret) return { ok: false, reason: "licensing_not_configured" };
+    if (!timingSafeEqual(sign(payload, secret), signature)) {
+      return { ok: false, reason: "bad_signature" };
+    }
+  } else {
+    return { ok: false, reason: "malformed_key" };
+  }
 
   let claims;
   try {

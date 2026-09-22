@@ -38,3 +38,7 @@ tsconfig.tsbuildinfo
 
 # Packaging output when building to a non-default directory
 /installer-out
+
+# Licence signing key - NEVER commit or ship. Losing it orphans every key sold.
+license-private.pem
+license-private*.pem
