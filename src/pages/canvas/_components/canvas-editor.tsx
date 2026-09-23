@@ -75,7 +75,7 @@ import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
 import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
 import {
   ScanLine, Crop, Wand2, Eraser, Frame, PenTool, Sparkles,
-  MousePointer2, Square, Circle, Hexagon, Star, Minus, Type,
+  MousePointer2, Square, Circle, Hexagon, Star, Minus, Type, Hand,
 } from "lucide-react";
 import { toast } from "sonner";
 import CropModal from "./crop-modal.tsx";
@@ -317,6 +317,38 @@ const MAX_CANVAS_DPR = 2;
 
 /** Longest edge of the offscreen bitmap the design filters are rasterised into. */
 const MAX_DESIGN_RASTER_PX = 2048;
+
+/** Zoom stops the buttons step through. */
+const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
+const MIN_ZOOM = 0.25;
+const MAX_ZOOM = 8;
+
+/**
+ * Where the workspace view is looking: which part of the canvas space fills the
+ * box, and how large it is drawn.
+ */
+type ViewState = { zoom: number; panX: number; panY: number };
+
+/**
+ * Keep a view inside its box. Zoomed out, the canvas is centred rather than left
+ * floating wherever the last drag ended; zoomed in, it stays edge-locked so the
+ * material cannot be panned entirely out of sight.
+ */
+function clampView(view: ViewState, width: number, height: number): ViewState {
+  const zoom = Math.min(Math.max(view.zoom, MIN_ZOOM), MAX_ZOOM);
+  if (zoom <= 1) {
+    return {
+      zoom,
+      panX: (width * (1 - zoom)) / 2,
+      panY: (height * (1 - zoom)) / 2,
+    };
+  }
+  return {
+    zoom,
+    panX: Math.min(0, Math.max(width * (1 - zoom), view.panX)),
+    panY: Math.min(0, Math.max(height * (1 - zoom), view.panY)),
+  };
+}
 
 /**
  * Device pixel ratio for the canvas bitmaps.
@@ -1021,6 +1053,24 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [showRuler, setShowRuler] = useState(_saved.showRuler ?? true);
   const [resizeMode, setResizeMode] = useState(_saved.resizeMode ?? false);
   const dpr = useCanvasDpr();
+
+  /**
+   * The workspace view — zoom and pan — kept apart from the canvas space.
+   *
+   * Everything the editor stores (traced points, masks, design position, the
+   * export maths) lives in `displayWidth × displayHeight`. The view only decides
+   * how much of that space fills the box, so zooming can never move a design
+   * relative to the part, change a measurement, or alter an export.
+   */
+  const [view, setView] = useState<ViewState>({ zoom: 1, panX: 0, panY: 0 });
+  // Read by pointer handlers, which must see the current view without every one
+  // of them being rebuilt on each zoom step.
+  const viewRef = useRef(view);
+  useEffect(() => {
+    viewRef.current = view;
+  }, [view]);
+  const [panMode, setPanMode] = useState(false);
+  const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
   const [manualDisplaySize, setManualDisplaySize] = useState<{ w: number; h: number } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
@@ -1547,10 +1597,21 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     // Draw in display coordinates. The bitmap itself is dpr× larger than the
     // CSS box, so this transform is what makes the preview land on physical
     // pixels instead of being stretched across them.
-    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    // Wipe the whole bitmap first: zoomed out, the canvas space no longer covers
+    // every device pixel, so clearing in canvas coordinates would leave a frame
+    // of the previous view behind.
+    ctx.setTransform(1, 0, 0, 1, 0, 0);
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    ctx.setTransform(
+      dpr * view.zoom,
+      0,
+      0,
+      dpr * view.zoom,
+      dpr * view.panX,
+      dpr * view.panY
+    );
     ctx.imageSmoothingEnabled = true;
     ctx.imageSmoothingQuality = "high";
-    ctx.clearRect(0, 0, displayWidth, displayHeight);
 
     // Material background
     if (partPhoto) {
@@ -1665,7 +1726,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     // Vector layer sits above the design so cut lines stay readable.
     paintVectorObjects(ctx, 1, 1);
 
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects, dpr]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects, dpr, view]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
@@ -1698,8 +1759,18 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
     const ppiX = w / matW;
     const ppiY = h / matH;
-    const tickInterval = u === "in" ? 0.5 : 10;
-    const subTick = u === "in" ? 0.25 : 5;
+    // Graduations live in view pixels: the ruler is a window frame, so the ticks
+    // spread and refine with the zoom instead of being stretched with it.
+    const viewPx = (contentPx: number, pan: number) => contentPx * view.zoom + pan;
+    const ladder =
+      u === "in" ? [1, 0.5, 0.25, 0.125, 0.0625, 0.03125] : [100, 50, 25, 10, 5, 2, 1];
+    // The step is the finest one that still leaves room for a legible label.
+    const pickStep = (ppi: number) =>
+      ladder.find((step) => step * ppi * view.zoom >= 90) ?? ladder[ladder.length - 1];
+    const tickInterval = pickStep(ppiX);
+    const subTick = tickInterval / (u === "in" ? 4 : 5);
+    const tickLabel = (v: number) =>
+      u === "in" ? `${Number(v.toFixed(5))}"` : `${Math.round(v)}`;
     const bg = "rgba(200,160,60,0.18)";
     const tickColor = "rgba(200,160,60,0.7)";
     const labelColor = "rgba(200,160,60,0.85)";
@@ -1717,14 +1788,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       tCtx.fillRect(0, rT - 1, w, 1);
       tCtx.font = "8px monospace";
       for (let v = 0; v <= matW + 0.001; v += subTick) {
-        const isMajor = Math.abs(v % tickInterval) < 0.001 || Math.abs(v % tickInterval - tickInterval) < 0.001;
-        const px = Math.round(v * ppiX);
+      const isMajor = Math.abs(v / tickInterval - Math.round(v / tickInterval)) < 1e-6;
+      const px = Math.round(viewPx(v * ppiX, view.panX));
+      if (px < -20 || px > w + 20) continue;
         const tickH = isMajor ? rT * 0.55 : rT * 0.3;
         tCtx.fillStyle = tickColor;
         tCtx.fillRect(px, rT - tickH, 1, tickH);
         if (isMajor && v > 0) {
           tCtx.fillStyle = labelColor;
-          const label = u === "in" ? `${v}"` : `${v}`;
+          const label = tickLabel(v);
           tCtx.fillText(label, px + 2, rT - tickH - 2);
         }
       }
@@ -1743,8 +1815,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       lCtx.fillRect(rT - 1, 0, 1, h);
       lCtx.font = "8px monospace";
       for (let v = 0; v <= matH + 0.001; v += subTick) {
-        const isMajor = Math.abs(v % tickInterval) < 0.001 || Math.abs(v % tickInterval - tickInterval) < 0.001;
-        const py = Math.round(v * ppiY);
+      const isMajor = Math.abs(v / tickInterval - Math.round(v / tickInterval)) < 1e-6;
+      const py = Math.round(viewPx(v * ppiY, view.panY));
+      if (py < -20 || py > h + 20) continue;
         const tW = isMajor ? rT * 0.55 : rT * 0.3;
         lCtx.fillStyle = tickColor;
         lCtx.fillRect(rT - tW, py, tW, 1);
@@ -1753,13 +1826,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           lCtx.translate(rT - tW - 2, py - 2);
           lCtx.rotate(-Math.PI / 2);
           lCtx.fillStyle = labelColor;
-          const label = u === "in" ? `${v}"` : `${v}`;
+          const label = tickLabel(v);
           lCtx.fillText(label, 0, 0);
           lCtx.restore();
         }
       }
     }
-  }, [displayWidth, displayHeight, material, unit, dpr]);
+  }, [displayWidth, displayHeight, material, unit, dpr, view]);
 
 
 
@@ -1975,12 +2048,125 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [design, displayWidth, displayHeight, material, unit]);
 
   // --- Drag to reposition ---
-  const getPos = useCallback((clientX: number, clientY: number): Pt => {
+  const getPos = useCallback(
+    (clientX: number, clientY: number): Pt => {
+      const canvas = canvasRef.current;
+      if (!canvas) return { x: clientX, y: clientY };
+      const rect = canvas.getBoundingClientRect();
+      // Pointer pixels are view pixels; everything downstream wants canvas space.
+      const v = viewRef.current;
+      return {
+        x: (clientX - rect.left - v.panX) / v.zoom,
+        y: (clientY - rect.top - v.panY) / v.zoom,
+      };
+    },
+    []
+  );
+
+  /** Content point → its position inside the workspace box. */
+  const toView = useCallback(
+    (x: number, y: number) => ({ x: x * view.zoom + view.panX, y: y * view.zoom + view.panY }),
+    [view]
+  );
+
+  /** A content-space span, as it appears on screen. */
+  const viewSpan = useCallback((n: number) => n * view.zoom, [view]);
+
+  /**
+   * A square handle of `size` screen pixels centred on a content-space point, so
+   * grips stay the same size to grab however far the view is zoomed in.
+   */
+  const handleBoxAt = useCallback(
+    (x: number, y: number, size: number) => {
+      const p = toView(x, y);
+      return { left: p.x - size / 2, top: p.y - size / 2, width: size, height: size };
+    },
+    [toView]
+  );
+
+  /** A content-space rectangle, scaled into the view. */
+  const viewRect = useCallback(
+    (x: number, y: number, w: number, h: number) => {
+      const p = toView(x, y);
+      return { left: p.x, top: p.y, width: viewSpan(w), height: viewSpan(h) };
+    },
+    [toView, viewSpan]
+  );
+
+  /** A pixel tolerance that feels the same to the hand at any zoom. */
+  const screenTolerance = useCallback((px: number) => px / view.zoom, [view]);
+
+  /**
+   * The visible slice of canvas space, for the overlay layers that draw in SVG
+   * user units — one viewBox swap zooms a whole layer.
+   */
+  const viewBox = `${-view.panX / view.zoom} ${-view.panY / view.zoom} ${displayWidth / view.zoom} ${displayHeight / view.zoom}`;
+
+  const zoomAtViewPoint = useCallback(
+    (zoom: number, viewX: number, viewY: number) => {
+      setView((current) => {
+        const next = Math.min(Math.max(zoom, MIN_ZOOM), MAX_ZOOM);
+        const k = next / current.zoom;
+        return clampView(
+          {
+            zoom: next,
+            panX: viewX - (viewX - current.panX) * k,
+            panY: viewY - (viewY - current.panY) * k,
+          },
+          displayWidth,
+          displayHeight
+        );
+      });
+    },
+    [displayWidth, displayHeight]
+  );
+
+  const stepZoom = useCallback(
+    (direction: 1 | -1) => {
+      setView((current) => {
+        const next =
+          direction > 0
+            ? ZOOM_STEPS.find((z) => z > current.zoom + 1e-4) ?? MAX_ZOOM
+            : [...ZOOM_STEPS].reverse().find((z) => z < current.zoom - 1e-4) ?? MIN_ZOOM;
+        const k = next / current.zoom;
+        const cx = displayWidth / 2;
+        const cy = displayHeight / 2;
+        return clampView(
+          { zoom: next, panX: cx - (cx - current.panX) * k, panY: cy - (cy - current.panY) * k },
+          displayWidth,
+          displayHeight
+        );
+      });
+    },
+    [displayWidth, displayHeight]
+  );
+
+  const resetView = useCallback(() => setView({ zoom: 1, panX: 0, panY: 0 }), []);
+
+  // A resized workspace box can leave an old pan pointing outside it.
+  useEffect(() => {
+    setView((current) => clampView(current, displayWidth, displayHeight));
+  }, [displayWidth, displayHeight]);
+
+  // Ctrl/⌘ + wheel zooms at the pointer. Registered natively because React's
+  // wheel listener is passive, and a passive one cannot stop Electron's own
+  // page zoom from firing at the same time.
+  useEffect(() => {
     const canvas = canvasRef.current;
-    if (!canvas) return { x: clientX, y: clientY };
-    const rect = canvas.getBoundingClientRect();
-    return { x: clientX - rect.left, y: clientY - rect.top };
-  }, []);
+    if (!canvas) return;
+    const onWheel = (e: WheelEvent) => {
+      if (!e.ctrlKey && !e.metaKey) return; // plain wheel still scrolls the page
+      e.preventDefault();
+      const rect = canvas.getBoundingClientRect();
+      zoomAtViewPoint(
+        viewRef.current.zoom * Math.exp(-e.deltaY * 0.0015),
+        e.clientX - rect.left,
+        e.clientY - rect.top
+      );
+    };
+    canvas.addEventListener("wheel", onWheel, { passive: false });
+    return () => canvas.removeEventListener("wheel", onWheel);
+  }, [zoomAtViewPoint]);
 
   const addPenTracePoint = useCallback(
     (point: Pt) => {
@@ -2065,6 +2251,19 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
+      // Panning moves the view, never the artwork. Middle-drag always works; the
+      // hand toggle is there because plenty of mice have no middle button.
+      if (panMode || e.button === 1) {
+        e.preventDefault();
+        panDragRef.current = {
+          startX: e.clientX,
+          startY: e.clientY,
+          panX: view.panX,
+          panY: view.panY,
+        };
+        return;
+      }
+
       if (penTraceActive) {
         e.preventDefault();
         addPenTracePoint(getPos(e.clientX, e.clientY));
@@ -2079,7 +2278,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           // Clicking back on the first point closes the path.
           if (vectorTool === "pen" && vectorDraft.length >= 3) {
             const first = vectorDraft[0];
-            if (Math.hypot(point.x - first.x, point.y - first.y) < 12) {
+            if (Math.hypot(point.x - first.x, point.y - first.y) < screenTolerance(12)) {
               finishVectorDraft(true);
               return;
             }
@@ -2123,12 +2322,28 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     [
       addPenTracePoint, design, eraserActive, getPos, getEraserPosInDesign,
       applyEraserStroke, draw, penTraceActive, vectorTool, vectorDraft,
-      vectorObjects, finishVectorDraft, setSelectedVectorId,
+      vectorObjects, finishVectorDraft, setSelectedVectorId, panMode, view, screenTolerance,
     ]
   );
 
   const handleMouseMove = useCallback(
     (e: React.MouseEvent) => {
+      const pan = panDragRef.current;
+      if (pan) {
+        setView(
+          clampView(
+            {
+              zoom: view.zoom,
+              panX: pan.panX + (e.clientX - pan.startX),
+              panY: pan.panY + (e.clientY - pan.startY),
+            },
+            displayWidth,
+            displayHeight
+          )
+        );
+        return;
+      }
+
       if (penTraceActive) {
         setPenTraceHover(clampPointToCanvas(getPos(e.clientX, e.clientY), displayWidth, displayHeight));
         return;
@@ -2182,11 +2397,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     [
       isDragging, design, dragStart, eraserActive, getPos, getEraserPosInDesign,
       applyEraserStroke, draw, updateDesignContinuously, penTraceActive, displayWidth,
-      displayHeight, vectorTool, applyVectorChange,
+      displayHeight, vectorTool, applyVectorChange, view,
     ]
   );
 
   const handleMouseUp = useCallback(() => {
+    panDragRef.current = null;
     if (isDragging) commitCurrentDesign();
     isErasingRef.current = false;
     setIsDragging(false);
@@ -3048,8 +3264,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const onMove = (ev: PointerEvent) => {
         const drag = designResizeDragRef.current;
         if (!drag || !design) return;
-        const dx = ev.clientX - drag.startMouseX;
-        const dy = ev.clientY - drag.startMouseY;
+        const dx = (ev.clientX - drag.startMouseX) / viewRef.current.zoom;
+        const dy = (ev.clientY - drag.startMouseY) / viewRef.current.zoom;
         const h = drag.handle;
 
         let newImgW = drag.startImgW;
@@ -3186,8 +3402,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const MIN_SIZE = 16;
 
       const onMove = (ev: PointerEvent) => {
-        const dx = ev.clientX - startX;
-        const dy = ev.clientY - startY;
+        const dx = (ev.clientX - startX) / viewRef.current.zoom;
+        const dy = (ev.clientY - startY) / viewRef.current.zoom;
 
         updateMaskContinuously((mask) => {
           if (mode === "move") {
@@ -3713,7 +3929,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const insertNodeNear = useCallback(
     (point: VecPt, tolerance = 14) => {
       if (!selectedVector) return false;
-      const hit = nearestPointOnPath(selectedVector.subpaths, point, 48);
+      // The search radius grows with the tolerance a zoomed-in view hands in.
+      const hit = nearestPointOnPath(selectedVector.subpaths, point, Math.max(48, tolerance * 3));
       if (!hit || hit.distance > tolerance) return false;
 
       const id = selectedVector.id;
@@ -4465,7 +4682,17 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 style={{
                   width: displayWidth,
                   height: displayHeight,
-                  cursor: penTraceActive ? "crosshair" : design ? (eraserActive ? "crosshair" : (isDragging ? "grabbing" : "grab")) : "default",
+                  cursor: panMode
+                    ? "grab"
+                    : penTraceActive
+                      ? "crosshair"
+                      : design
+                        ? eraserActive
+                          ? "crosshair"
+                          : isDragging
+                            ? "grabbing"
+                            : "grab"
+                        : "default",
                   touchAction: design || penTraceActive ? "none" : "pan-y",
                 }}
                 onMouseDown={handleMouseDown}
@@ -4474,7 +4701,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 onDoubleClick={(e) => {
                   // In node mode a double-click on the path inserts a node.
                   if (vectorNodeMode && selectedVector) {
-                    insertNodeNear(getPos(e.clientX, e.clientY));
+                    insertNodeNear(getPos(e.clientX, e.clientY), screenTolerance(14));
                   }
                 }}
                 onMouseLeave={() => { setPenTraceHover(null); handleMouseUp(); }}
@@ -4493,7 +4720,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                   <svg
                     className="absolute inset-0 z-30 overflow-visible"
                     style={{ width: displayWidth, height: displayHeight, pointerEvents: "none" }}
-                    viewBox={`0 0 ${displayWidth} ${displayHeight}`}
+                    viewBox={viewBox}
                   >
                     {tracePath && (
                       <path
@@ -4533,10 +4760,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     data-engraving-trace-point={index}
                     className="absolute z-[60] box-border rounded-full border-2 border-slate-950 p-0 shadow-[0_0_0_1px_rgba(255,255,255,0.75),0_2px_8px_rgba(0,0,0,0.55)]"
                     style={{
-                      left: point.x - handleSize / 2,
-                      top: point.y - handleSize / 2,
-                      width: handleSize,
-                      height: handleSize,
+                      ...handleBoxAt(point.x, point.y, handleSize),
                       backgroundColor: index === 0 ? "#22c55e" : "#facc15",
                       cursor: "move",
                     }}
@@ -4568,10 +4792,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 };
                 const handlePoint = (x: number, y: number) => {
                   const point = rotatePoint(x, y);
-                  return {
-                    left: clampHandleCenter(point.x, displayWidth) - halfHandle,
-                    top: clampHandleCenter(point.y, displayHeight) - halfHandle,
-                  };
+                  const p = toView(
+                    clampHandleCenter(point.x, displayWidth),
+                    clampHandleCenter(point.y, displayHeight),
+                  );
+                  return { left: p.x - halfHandle, top: p.y - halfHandle };
                 };
 
                 const handles: { id: "n"|"s"|"e"|"w"|"nw"|"ne"|"sw"|"se"; left: number; top: number; cursor: string }[] = [
@@ -4591,8 +4816,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     <div
                       className="absolute z-40 pointer-events-none"
                       style={{
-                        left: design.x, top: design.y,
-                        width: imgW, height: imgH,
+                        ...viewRect(design.x, design.y, imgW, imgH),
                         border: "2px dashed rgba(249,115,22,0.95)",
                         boxSizing: "border-box",
                         boxShadow: "inset 0 0 0 1px rgba(15,23,42,0.9), 0 0 0 1px rgba(255,255,255,0.65)",
@@ -4615,7 +4839,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         onPointerDown={(e) => handleDesignResizePointerDown(e, h.id)}
                       />
                     ))}
-                    <div className="absolute bottom-2 right-2 pointer-events-none">
+                    <div className="absolute bottom-2 left-2 pointer-events-none">
                       <span className="text-[10px] bg-black/60 text-white px-1.5 py-0.5 rounded">
                         {t("canvas.resizeHint")}
                       </span>
@@ -4646,10 +4870,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 };
                 const handlePoint = (x: number, y: number) => {
                   const point = rotatePoint(x, y);
-                  return {
-                    left: clampCenter(point.x, displayWidth) - halfHandle,
-                    top: clampCenter(point.y, displayHeight) - halfHandle,
-                  };
+                  const p = toView(
+                    clampCenter(point.x, displayWidth),
+                    clampCenter(point.y, displayHeight),
+                  );
+                  return { left: p.x - halfHandle, top: p.y - halfHandle };
                 };
 
                 const handles: { id: DesignResizeHandle; left: number; top: number; cursor: string }[] = [
@@ -4669,8 +4894,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     <div
                       className="absolute z-40 pointer-events-none"
                       style={{
-                        left: mask.x, top: mask.y,
-                        width: mask.w, height: mask.h,
+                        ...viewRect(mask.x, mask.y, mask.w, mask.h),
                         border: "2px dashed rgba(34,211,238,0.95)",
                         boxSizing: "border-box",
                         boxShadow: "inset 0 0 0 1px rgba(15,23,42,0.9), 0 0 0 1px rgba(255,255,255,0.7)",
@@ -4685,8 +4909,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       aria-label="Move mask"
                       className="absolute z-[75] flex items-center gap-1 rounded-full bg-cyan-400 px-2 py-0.5 text-[10px] font-semibold text-slate-950 shadow-[0_0_0_2px_rgba(15,23,42,0.9),0_2px_8px_rgba(0,0,0,0.5)] whitespace-nowrap"
                       style={{
-                        left: Math.max(0, Math.min(mask.x, displayWidth - 90)),
-                        top: Math.max(0, mask.y - 22),
+                        ...toView(
+                          Math.max(0, Math.min(mask.x, displayWidth - 90)),
+                          Math.max(0, mask.y - 22)
+                        ),
                         cursor: "move",
                         touchAction: "none",
                       }}
@@ -4734,8 +4960,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         <div
                           className="absolute z-40 pointer-events-none"
                           style={{
-                            left: bounds.x, top: bounds.y,
-                            width: bounds.w, height: bounds.h,
+                            ...viewRect(bounds.x, bounds.y, bounds.w, bounds.h),
                             border: "1.5px dashed rgba(34,197,94,0.95)",
                             boxSizing: "border-box",
                             boxShadow: "inset 0 0 0 1px rgba(15,23,42,0.8), 0 0 0 1px rgba(255,255,255,0.5)",
@@ -4748,10 +4973,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                             aria-label={`Scale vector object ${corner}`}
                             className="absolute z-[72] box-border rounded-[3px] border-2 border-green-500 bg-white shadow-[0_0_0_2px_rgba(15,23,42,0.85)] cursor-nwse-resize"
                             style={{
-                              left: (corner.includes("w") ? bounds.x : bounds.x + bounds.w) - HANDLE / 2,
-                              top: (corner.includes("n") ? bounds.y : bounds.y + bounds.h) - HANDLE / 2,
-                              width: HANDLE,
-                              height: HANDLE,
+                              ...handleBoxAt(
+                                corner.includes("w") ? bounds.x : bounds.x + bounds.w,
+                                corner.includes("n") ? bounds.y : bounds.y + bounds.h,
+                                HANDLE
+                              ),
                               touchAction: "none",
                             }}
                             onPointerDown={(e) => handleVectorScalePointerDown(e, corner)}
@@ -4762,7 +4988,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
                     {/* Pen progress: committed points plus a rubber-band preview */}
                     {vectorDraft.length > 0 && (
-                      <svg className="absolute inset-0 z-[65] h-full w-full pointer-events-none">
+                      <svg
+                        className="absolute inset-0 z-[65] h-full w-full pointer-events-none"
+                        viewBox={viewBox}
+                      >
                         <polyline
                           points={[...vectorDraft, ...(vectorHover ? [vectorHover] : [])]
                             .map((point) => `${point.x},${point.y}`)
@@ -4790,8 +5019,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       <div
                         className="absolute z-[65] pointer-events-none border-2 border-dashed border-red-500/90 bg-red-500/10"
                         style={{
-                          left: draftBox.x, top: draftBox.y,
-                          width: draftBox.w, height: draftBox.h,
+                          ...viewRect(draftBox.x, draftBox.y, draftBox.w, draftBox.h),
                         }}
                       />
                     )}
@@ -4802,7 +5030,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
               {/* Node editing — anchors and bezier handles */}
               {selectedVector && vectorNodeMode && (
                 <>
-                  <svg className="absolute inset-0 z-[68] h-full w-full pointer-events-none">
+                  <svg
+                    className="absolute inset-0 z-[68] h-full w-full pointer-events-none"
+                    viewBox={viewBox}
+                  >
                     {selectedVector.subpaths.flatMap((subpath, subpathIndex) =>
                       subpath.anchors.flatMap((anchor, anchorIndex) => {
                         const isSelected =
@@ -4850,10 +5081,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                               isSelected ? "border-cyan-400 bg-cyan-200" : "border-sky-500 bg-white"
                             } shadow-[0_0_0_2px_rgba(15,23,42,0.85)]`}
                             style={{
-                              left: anchor.x - 5,
-                              top: anchor.y - 5,
-                              width: 10,
-                              height: 10,
+                              ...handleBoxAt(anchor.x, anchor.y, 10),
                               cursor: "move",
                               touchAction: "none",
                             }}
@@ -4869,10 +5097,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                                 aria-label={`Handle ${which}`}
                                 className="absolute z-[74] box-border rounded-full border-2 border-cyan-400 bg-white shadow-[0_0_0_2px_rgba(15,23,42,0.85)]"
                                 style={{
-                                  left: handle.x - 5,
-                                  top: handle.y - 5,
-                                  width: 10,
-                                  height: 10,
+                                  ...handleBoxAt(handle.x, handle.y, 10),
                                   cursor: "crosshair",
                                   touchAction: "none",
                                 }}
@@ -4945,6 +5170,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     <svg
                       className="absolute inset-0 overflow-visible"
                       style={{ width: displayWidth, height: displayHeight }}
+                      viewBox={viewBox}
                     >
                       {/* Visible mesh outline through pins */}
                       {edges.map((edge) => (
@@ -5006,10 +5232,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         key={c.id}
                         className="absolute z-30 border-2 border-white cursor-move bg-primary rounded-full"
                         style={{
-                          left: c.pos.x - CORNER_HW / 2,
-                          top: c.pos.y - CORNER_HW / 2,
-                          width: CORNER_HW,
-                          height: CORNER_HW,
+                          ...handleBoxAt(c.pos.x, c.pos.y, CORNER_HW),
                         }}
                         onMouseDown={(e) => handleWarpCornerMouseDown(e, c.id)}
                         title={c.label}
@@ -5024,10 +5247,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                             key={`${edge}-${pin.id}`}
                             className="absolute z-30 border-2 border-white cursor-move bg-amber-500 rounded-sm rotate-45"
                             style={{
-                              left: pos.x - PIN_HW / 2,
-                              top: pos.y - PIN_HW / 2,
-                              width: PIN_HW,
-                              height: PIN_HW,
+                              ...handleBoxAt(pos.x, pos.y, PIN_HW),
                             }}
                             onMouseDown={(e) => handleWarpPinMouseDown(e, edge, pin.id)}
                             onContextMenu={(e) => handleWarpPinRemove(e, edge, pin.id)}
@@ -5047,10 +5267,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                           aria-label={`Local warp dot ${index + 1}`}
                           className="absolute z-40 box-border rounded-full border-[3px] border-white bg-sky-400 p-0 shadow-[0_0_0_2px_rgba(8,47,73,0.9),0_3px_10px_rgba(0,0,0,0.55)]"
                           style={{
-                            left: pos.x - LOCAL_PIN_HW / 2,
-                            top: pos.y - LOCAL_PIN_HW / 2,
-                            width: LOCAL_PIN_HW,
-                            height: LOCAL_PIN_HW,
+                            ...handleBoxAt(pos.x, pos.y, LOCAL_PIN_HW),
                             cursor: "move",
                           }}
                           onMouseDown={(e) => handleWarpInteriorPinMouseDown(e, pin.id)}
@@ -5115,7 +5332,47 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                     </div>
                   </div>
                 )}
-              {/* Resize handles (visible when resizeMode is active) */}
+              {/* View zoom — display only; artwork and exports are untouched */}
+              <div className="absolute bottom-2 right-2 z-[80] flex items-center gap-0.5 rounded-lg border border-border bg-card/95 px-1 py-0.5 shadow-sm">
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  aria-label={t("editor.zoom.out")}
+                  title={t("editor.zoom.out")}
+                  onClick={() => stepZoom(-1)}
+                >
+                  <ZoomOut className="h-3.5 w-3.5" />
+                </Button>
+                <button
+                  type="button"
+                  onClick={resetView}
+                  title={t("editor.zoom.reset")}
+                  className="w-11 text-[10px] tabular-nums text-muted-foreground hover:text-foreground"
+                >
+                  {Math.round(view.zoom * 100)}%
+                </button>
+                <Button
+                  size="icon"
+                  variant="ghost"
+                  className="h-6 w-6"
+                  aria-label={t("editor.zoom.in")}
+                  title={t("editor.zoom.in")}
+                  onClick={() => stepZoom(1)}
+                >
+                  <ZoomIn className="h-3.5 w-3.5" />
+                </Button>
+                <Button
+                  size="icon"
+                  variant={panMode ? "secondary" : "ghost"}
+                  className="h-6 w-6"
+                  aria-label={t("editor.zoom.pan")}
+                  title={t("editor.zoom.pan")}
+                  onClick={() => setPanMode((value) => !value)}
+                >
+                  <Hand className="h-3.5 w-3.5" />
+                </Button>
+              </div>
               {resizeMode && (
                 <>
                   {/* Right edge handle */}
