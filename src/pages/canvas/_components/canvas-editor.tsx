@@ -35,6 +35,7 @@ import {
   RotateCw,
   RotateCcw,
   Maximize2,
+  Minimize2,
   Move,
   ZoomIn,
   ZoomOut,
@@ -2586,15 +2587,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   // Quick actions
   /**
-   * Bounding box of the traced template, when the design is clipped to one.
+   * Bounding box of the traced part outline.
    *
-   * Fill targets this rather than the canvas. The canvas *is* the material, so
-   * covering it only looked like "filling the template" while the two happened
-   * to be the same size — which is why Fill swallowed the whole workspace the
-   * moment the canvas changed size.
+   * Fill and Fit target this rather than the canvas. The canvas *is* the
+   * material, so targeting it only looked right while the part and the material
+   * happened to be the same size. Whether the outline is closed, and whether the
+   * artwork is being clipped to it, does not change what it means: tracing the
+   * part is what says "this is the part".
    */
   const templateBounds = useMemo(() => {
-    if (!clipDesignToTrace || !penTraceClosed || penTracePoints.length < 3) return null;
+    if (penTracePoints.length < 3) return null;
     const xs = penTracePoints.map((point) => point.x);
     const ys = penTracePoints.map((point) => point.y);
     const x = Math.min(...xs);
@@ -2603,37 +2605,63 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     const h = Math.max(...ys) - y;
     if (w <= 0 || h <= 0) return null;
     return { x, y, w, h };
-  }, [clipDesignToTrace, penTraceClosed, penTracePoints]);
+  }, [penTracePoints]);
 
-  const handleFill = useCallback(() => {
-    if (!design) return;
-    // Fit the whole artwork inside the template when there is one; the material
-    // otherwise. `min` rather than `max` contains the image: the entire artwork
-    // stays visible, letterboxed within the template instead of cropped to it.
-    const target = templateBounds ?? { x: 0, y: 0, w: displayWidth, h: displayHeight };
-    const fitScale = Math.min(
-      target.w / design.naturalWidth,
-      target.h / design.naturalHeight
-    );
-    const filledWidthIn = displayToInches(design.naturalWidth * fitScale, displayWidth, material.widthIn);
-    const filledHeightIn = displayToInches(design.naturalHeight * fitScale, displayHeight, material.heightIn);
-    setDesign({
-      ...design,
-      scale: fitScale,
-      scaleX: 1,
-      scaleY: 1,
-      x: target.x + (target.w - design.naturalWidth * fitScale) / 2,
-      y: target.y + (target.h - design.naturalHeight * fitScale) / 2,
-      rotation: 0,
-    });
-    if (unit === "in") {
-      setDesignWidthInput(filledWidthIn.toFixed(2));
-      setDesignHeightInput(filledHeightIn.toFixed(2));
-    } else {
-      setDesignWidthInput(inToMm(filledWidthIn).toFixed(1));
-      setDesignHeightInput(inToMm(filledHeightIn).toFixed(1));
-    }
-  }, [design, displayWidth, displayHeight, material.heightIn, material.widthIn, templateBounds, unit]);
+  /**
+   * Scale the artwork against the part.
+   *
+   * `cover` grows it until it fills the part, cropping whatever spills over;
+   * `contain` shrinks it until all of the artwork is inside the part. Both centre
+   * on the part outline when one has been traced (the material otherwise), and
+   * both keep the design's rotation — the scale is measured against the rotated
+   * bounds, so a rotated design still covers or fits as advertised.
+   */
+  const fitDesignToTarget = useCallback(
+    (mode: "cover" | "contain") => {
+      if (!design) return;
+      const target = templateBounds ?? { x: 0, y: 0, w: displayWidth, h: displayHeight };
+      const radians = (design.rotation * Math.PI) / 180;
+      const cos = Math.abs(Math.cos(radians));
+      const sin = Math.abs(Math.sin(radians));
+      const boxW = design.naturalWidth * cos + design.naturalHeight * sin;
+      const boxH = design.naturalWidth * sin + design.naturalHeight * cos;
+      const scale =
+        mode === "cover"
+          ? Math.max(target.w / boxW, target.h / boxH)
+          : Math.min(target.w / boxW, target.h / boxH);
+      const imgW = design.naturalWidth * scale;
+      const imgH = design.naturalHeight * scale;
+
+      commitDesignUpdate((current) => ({
+        ...current,
+        scale,
+        scaleX: 1,
+        scaleY: 1,
+        x: target.x + (target.w - imgW) / 2,
+        y: target.y + (target.h - imgH) / 2,
+      }));
+
+      const widthIn = displayToInches(imgW, displayWidth, material.widthIn);
+      const heightIn = displayToInches(imgH, displayHeight, material.heightIn);
+      if (unit === "in") {
+        setDesignWidthInput(widthIn.toFixed(2));
+        setDesignHeightInput(heightIn.toFixed(2));
+      } else {
+        setDesignWidthInput(inToMm(widthIn).toFixed(1));
+        setDesignHeightInput(inToMm(heightIn).toFixed(1));
+      }
+    },
+    [
+      design, displayWidth, displayHeight, material.heightIn, material.widthIn,
+      templateBounds, unit, commitDesignUpdate,
+    ]
+  );
+
+  /** Fill the part: the artwork covers it, cropping whatever spills over. */
+  const handleFill = useCallback(() => fitDesignToTarget("cover"), [fitDesignToTarget]);
+
+  /** Fit the part: every bit of the artwork stays visible inside it. */
+  const handleFit = useCallback(() => fitDesignToTarget("contain"), [fitDesignToTarget]);
 
   const handleCenter = useCallback(() => {
     if (!design) return;
@@ -5412,6 +5440,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <Button variant="secondary" size="sm" onClick={handleFill}>
                   <Maximize2 className="mr-1 h-3 w-3" /> {t("panel.design.fill")}
                 </Button>
+                <Button variant="secondary" size="sm" onClick={handleFit}>
+                  <Minimize2 className="mr-1 h-3 w-3" /> {t("panel.design.fit")}
+                </Button>
                 <Button variant="secondary" size="sm" onClick={handleCenter}>
                   <Move className="mr-1 h-3 w-3" /> {t("panel.design.center")}
                 </Button>
@@ -6190,13 +6221,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       />
                     </div>
 
-                    {/* Quick position */}
+                    {/* Quick position — Fill crops to the part, Fit keeps all of it */}
                     <div className="flex gap-2 pt-1">
                       <Button variant="secondary" size="sm" className="flex-1" onClick={handleFill}>
-                        <Maximize2 className="mr-1 h-3 w-3" /> Fill
+                        <Maximize2 className="mr-1 h-3 w-3" /> {t("panel.design.fill")}
+                      </Button>
+                      <Button variant="secondary" size="sm" className="flex-1" onClick={handleFit}>
+                        <Minimize2 className="mr-1 h-3 w-3" /> {t("panel.design.fit")}
                       </Button>
                       <Button variant="secondary" size="sm" className="flex-1" onClick={handleCenter}>
-                        <Move className="mr-1 h-3 w-3" /> Center
+                        <Move className="mr-1 h-3 w-3" /> {t("panel.design.center")}
                       </Button>
                     </div>
                   </TabsContent>
