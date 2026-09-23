@@ -118,7 +118,7 @@ import {
   type VectorObject,
 } from "./vector-path.ts";
 import { buildVectorSvg, describeVectorExport } from "./vector-export.ts";
-import { importSvgAsVectors } from "./svg-import.ts";
+import { importSvgAsVectors, multiply } from "./svg-import.ts";
 import {
   activateLicense,
   denialMessage,
@@ -309,6 +309,46 @@ function createActualSizePenTraceSvg({
 
 function svgToDataUrl(svg: string): string {
   return `data:image/svg+xml;charset=utf-8,${encodeURIComponent(svg)}`;
+}
+
+/** Ceiling on the canvas backing store. Past 2× the memory cost keeps climbing
+ *  and the detail stops being visible. */
+const MAX_CANVAS_DPR = 2;
+
+/** Longest edge of the offscreen bitmap the design filters are rasterised into. */
+const MAX_DESIGN_RASTER_PX = 2048;
+
+/**
+ * Device pixel ratio for the canvas bitmaps.
+ *
+ * The canvases are laid out in CSS pixels, but their backing stores are sized
+ * in physical pixels. Without this, a display at 200% scaling makes the browser
+ * stretch a 1× bitmap over 2× the pixels, and every part photo and design
+ * preview reads as soft and degraded. Re-reads the ratio when the window moves
+ * to a display with a different scale factor.
+ */
+function useCanvasDpr(): number {
+  const [dpr, setDpr] = React.useState(() =>
+    Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR)
+  );
+  React.useEffect(() => {
+    const read = () => Math.min(window.devicePixelRatio || 1, MAX_CANVAS_DPR);
+    const update = () => setDpr(read());
+    update();
+    window.addEventListener("resize", update);
+    let query: MediaQueryList | null = null;
+    try {
+      query = window.matchMedia(`(resolution: ${window.devicePixelRatio}dppx)`);
+      query.addEventListener("change", update);
+    } catch {
+      query = null; // Older runtime: the resize listener still covers most cases.
+    }
+    return () => {
+      window.removeEventListener("resize", update);
+      query?.removeEventListener("change", update);
+    };
+  }, [dpr]);
+  return dpr;
 }
 
 function drawTraceOnCanvas(
@@ -611,6 +651,11 @@ function applyFiltersToCanvas(
   off.height = h;
   const ctx = off.getContext("2d");
   if (!ctx) return off;
+  // The source is nearly always far larger than the space it occupies on
+  // screen, so the downscale has to be a good one — Chromium's default is
+  // "low", which leaves fine line art looking chewed up.
+  ctx.imageSmoothingEnabled = true;
+  ctx.imageSmoothingQuality = "high";
   ctx.filter = [
     `brightness(${filters.brightness}%)`,
     `contrast(${filters.contrast}%)`,
@@ -729,13 +774,18 @@ function drawWarpedImage(
       const p01 = meshPt(mesh, s0, t1);
       const p11 = meshPt(mesh, s1, t1);
       ctx.save();
-      ctx.setTransform(
-        (p10.x - p00.x) / cellW,
-        (p10.y - p00.y) / cellW,
-        (p01.x - p00.x) / cellH,
-        (p01.y - p00.y) / cellH,
-        p00.x, p00.y
-      );
+      // Compose the cell transform onto whatever is already active — the canvas
+      // draws in display coordinates on a dpr-scaled context — instead of
+      // replacing it, which would drop the device-pixel scale.
+      const cell = multiply(ctx.getTransform(), {
+        a: (p10.x - p00.x) / cellW,
+        b: (p10.y - p00.y) / cellW,
+        c: (p01.x - p00.x) / cellH,
+        d: (p01.y - p00.y) / cellH,
+        e: p00.x,
+        f: p00.y,
+      });
+      ctx.setTransform(cell.a, cell.b, cell.c, cell.d, cell.e, cell.f);
       ctx.drawImage(filtered, srcX, srcY, srcW, srcH, 0, 0, cellW, cellH);
       ctx.restore();
       void p11;
@@ -970,6 +1020,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   );
   const [showRuler, setShowRuler] = useState(_saved.showRuler ?? true);
   const [resizeMode, setResizeMode] = useState(_saved.resizeMode ?? false);
+  const dpr = useCanvasDpr();
   const [manualDisplaySize, setManualDisplaySize] = useState<{ w: number; h: number } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
@@ -1493,6 +1544,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     if (!canvas) return;
     const ctx = canvas.getContext("2d");
     if (!ctx) return;
+    // Draw in display coordinates. The bitmap itself is dpr× larger than the
+    // CSS box, so this transform is what makes the preview land on physical
+    // pixels instead of being stretched across them.
+    ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
     ctx.clearRect(0, 0, displayWidth, displayHeight);
 
     // Material background
@@ -1544,14 +1601,16 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       // A shape mask clips in canvas space, so the design is drawn into its own
       // layer first and clipped before compositing (PowerClip behaviour).
       let maskLayer: HTMLCanvasElement | null = null;
+      let maskLayerCtx: CanvasRenderingContext2D | null = null;
       let g: CanvasRenderingContext2D = ctx;
       if (design.mask) {
         maskLayer = document.createElement("canvas");
-        maskLayer.width = displayWidth;
-        maskLayer.height = displayHeight;
-        const layerCtx = maskLayer.getContext("2d");
-        if (layerCtx) {
-          g = layerCtx;
+        maskLayer.width = Math.round(displayWidth * dpr);
+        maskLayer.height = Math.round(displayHeight * dpr);
+        maskLayerCtx = maskLayer.getContext("2d");
+        if (maskLayerCtx) {
+          maskLayerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          g = maskLayerCtx;
         } else {
           maskLayer = null;
         }
@@ -1562,8 +1621,22 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         clipToTracePath(g, penTracePoints);
       }
 
-      // Apply filters via offscreen canvas
-      const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH, eraserMaskRef.current);
+      // Rasterise the filtered design at device resolution, then draw it back
+      // at display size. A design no larger than the canvas gets the full dpr;
+      // a design scaled up past the canvas stops at what the screen can show,
+      // so dragging one around cannot tank the frame rate.
+      const rasterCeiling = Math.min(
+        MAX_DESIGN_RASTER_PX,
+        Math.round(Math.max(displayWidth, displayHeight) * dpr)
+      );
+      const rasScale = Math.min(dpr, rasterCeiling / Math.max(imgW, imgH, 1));
+      const filtered = applyFiltersToCanvas(
+        design.element,
+        design.filters,
+        Math.max(1, Math.round(imgW * rasScale)),
+        Math.max(1, Math.round(imgH * rasScale)),
+        eraserMaskRef.current,
+      );
 
       if (design.warpMesh) {
         drawWarpedImage(g, filtered, design.warpMesh, design.opacity);
@@ -1580,24 +1653,30 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       g.restore();
 
       if (maskLayer && design.mask) {
-        applyMaskToCanvas(maskLayer, design.mask, 1, 1);
-        ctx.drawImage(maskLayer, 0, 0);
+        // The layer is device-sized, so the mask geometry is scaled to match it
+        // before being punched in, then composited back at display size. The
+        // masking itself runs at 1:1 so the clipped edge stays sharp.
+        maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
+        applyMaskToCanvas(maskLayer, design.mask, dpr, dpr);
+        ctx.drawImage(maskLayer, 0, 0, displayWidth, displayHeight);
       }
     }
 
     // Vector layer sits above the design so cut lines stay readable.
     paintVectorObjects(ctx, 1, 1);
 
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects, dpr]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
-    canvas.width = displayWidth;
-    canvas.height = displayHeight;
+    // Backing store in device pixels — this overrides the CSS-sized width and
+    // height the element is rendered with. Layout box stays in CSS pixels.
+    canvas.width = Math.round(displayWidth * dpr);
+    canvas.height = Math.round(displayHeight * dpr);
     draw();
     drawExternalRulers();
-  }, [displayWidth, displayHeight, draw]);
+  }, [displayWidth, displayHeight, dpr, draw]);
 
   useEffect(() => {
     draw();
@@ -1626,10 +1705,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     const labelColor = "rgba(200,160,60,0.85)";
 
     // Top (horizontal) ruler
-    topCanvas.width = w;
-    topCanvas.height = rT;
+    topCanvas.width = Math.round(w * dpr);
+    topCanvas.height = Math.round(rT * dpr);
     const tCtx = topCanvas.getContext("2d");
     if (tCtx) {
+      tCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       tCtx.clearRect(0, 0, w, rT);
       tCtx.fillStyle = bg;
       tCtx.fillRect(0, 0, w, rT);
@@ -1651,10 +1731,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
 
     // Left (vertical) ruler
-    leftCanvas.width = rT;
-    leftCanvas.height = h;
+    leftCanvas.width = Math.round(rT * dpr);
+    leftCanvas.height = Math.round(h * dpr);
     const lCtx = leftCanvas.getContext("2d");
     if (lCtx) {
+      lCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
       lCtx.clearRect(0, 0, rT, h);
       lCtx.fillStyle = bg;
       lCtx.fillRect(0, 0, rT, h);
@@ -1678,7 +1759,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         }
       }
     }
-  }, [displayWidth, displayHeight, material, unit]);
+  }, [displayWidth, displayHeight, material, unit, dpr]);
 
 
 
@@ -2363,6 +2444,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     offscreen.height = expH;
     const ctx = offscreen.getContext("2d");
     if (!ctx) return null;
+    ctx.imageSmoothingEnabled = true;
+    ctx.imageSmoothingQuality = "high";
 
     if (partPhoto) {
       const rad = (partRotation * Math.PI) / 180;
