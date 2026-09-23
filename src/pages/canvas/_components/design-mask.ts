@@ -296,25 +296,29 @@ function makeCanvas(width: number, height: number): HTMLCanvasElement {
  * Feather is applied by blurring the mask alpha before compositing, which gives
  * a soft edge that survives export — something a plain `ctx.clip()` cannot do.
  */
-export function applyMaskToCanvas(
+/**
+ * The shape's silhouette as a white-on-transparent layer the size of
+ * `target`. An inverted mask comes back as the canvas minus its shape, so
+ * the same layer serves both "keep inside" and "keep outside".
+ */
+function buildMaskLayer(
   target: HTMLCanvasElement,
-  mask: DesignMask | null | undefined,
-  scaleX = 1,
-  scaleY = 1
-): void {
-  if (!mask) return;
+  mask: DesignMask,
+  scaleX: number,
+  scaleY: number
+): HTMLCanvasElement | null {
   const width = target.width;
   const height = target.height;
-  if (!width || !height) return;
+  if (!width || !height) return null;
 
   const { path, boxW, boxH, fillRule } = maskPathData(mask);
   const boxW_ = boxW * scaleX;
   const boxH_ = boxH * scaleY;
-  if (boxW_ <= 0 || boxH_ <= 0) return;
+  if (boxW_ <= 0 || boxH_ <= 0) return null;
 
   const shapeLayer = makeCanvas(width, height);
   const shapeCtx = shapeLayer.getContext("2d");
-  if (!shapeCtx) return;
+  if (!shapeCtx) return null;
 
   const maskW = mask.w * scaleX;
   const maskH = mask.h * scaleY;
@@ -336,10 +340,10 @@ export function applyMaskToCanvas(
   shapeCtx.fillStyle = "#ffffff";
 
   try {
-    shapeCtx.fill(new Path2D(path), fillRule);
+  shapeCtx.fill(new Path2D(path), fillRule);
   } catch {
-    // Path2D unavailable (non-browser test env) — leave the design unmasked.
-    return;
+  // Path2D unavailable (non-browser test env) — leave the design unmasked.
+  return null;
   }
   shapeCtx.restore();
 
@@ -356,10 +360,44 @@ export function applyMaskToCanvas(
     }
   }
 
-  const ctx = target.getContext("2d");
-  if (!ctx) return;
-  ctx.save();
-  ctx.globalCompositeOperation = "destination-in";
-  ctx.drawImage(maskLayer, 0, 0);
-  ctx.restore();
-}
+  return maskLayer;
+  }
+  
+  /** Clip `target` down to the mask's shape — the PowerClip's job. */
+  export function applyMaskToCanvas(
+    target: HTMLCanvasElement,
+    mask: DesignMask | null | undefined,
+    scaleX = 1,
+    scaleY = 1
+  ): void {
+    if (!mask) return;
+    const layer = buildMaskLayer(target, mask, scaleX, scaleY);
+    if (!layer) return;
+    const ctx = target.getContext("2d");
+    if (!ctx) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-in";
+    ctx.drawImage(layer, 0, 0);
+    ctx.restore();
+  }
+  
+  /**
+   * Erase the shape from `target` — the keep-out's job: the artwork behind it
+   * goes away, so nothing lands where the part has a hole or an opening.
+   */
+  export function punchMaskFromCanvas(
+    target: HTMLCanvasElement,
+    mask: DesignMask | null | undefined,
+    scaleX = 1,
+    scaleY = 1
+  ): void {
+    if (!mask) return;
+    const layer = buildMaskLayer(target, mask, scaleX, scaleY);
+    if (!layer) return;
+    const ctx = target.getContext("2d");
+    if (!ctx) return;
+    ctx.save();
+    ctx.globalCompositeOperation = "destination-out";
+    ctx.drawImage(layer, 0, 0);
+    ctx.restore();
+  }

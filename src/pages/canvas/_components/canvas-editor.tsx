@@ -36,6 +36,8 @@ import {
   RotateCcw,
   Maximize2,
   Minimize2,
+  Ban,
+  Plus,
   Move,
   ZoomIn,
   ZoomOut,
@@ -83,11 +85,14 @@ import CropModal from "./crop-modal.tsx";
 import { removeBackground, roundCorners } from "./image-utils.ts";
 import {
   MASK_SHAPE_GROUPS,
+  MASK_SHAPES,
   applyMaskToCanvas,
   changeMaskShape,
   createDesignMask,
   fitMaskToBox,
   getMaskShape,
+  maskPathData,
+  punchMaskFromCanvas,
   type DesignMask,
   type MaskBox,
 } from "./design-mask.ts";
@@ -385,6 +390,36 @@ function useCanvasDpr(): number {
   return dpr;
 }
 
+/**
+ * Dashed outline of a shape, drawn beside the artwork on the workspace canvas.
+ * The keep-out preview lives here rather than in the DOM so it can never be
+ * mistaken for part of the drawing — the export builds its own canvas and never
+ * calls this.
+ */
+function strokeShapeOutline(
+  ctx: CanvasRenderingContext2D,
+  shape: DesignMask,
+  colour: string
+) {
+  const { path, boxW, boxH } = maskPathData(shape);
+  if (shape.w <= 0 || shape.h <= 0 || boxW <= 0 || boxH <= 0) return;
+  const scale = shape.w / boxW;
+  ctx.save();
+  ctx.translate(shape.x + shape.w / 2, shape.y + shape.h / 2);
+  ctx.rotate((shape.rotation * Math.PI) / 180);
+  ctx.translate(-shape.w / 2, -shape.h / 2);
+  ctx.scale(shape.w / boxW, shape.h / boxH);
+  ctx.lineWidth = 2 / scale;
+  ctx.setLineDash([6 / scale, 4 / scale]);
+  ctx.strokeStyle = colour;
+  try {
+    ctx.stroke(new Path2D(path));
+  } catch {
+    // Path2D unavailable (non-browser env) — nothing to draw.
+  }
+  ctx.restore();
+}
+
 function drawTraceOnCanvas(
   ctx: CanvasRenderingContext2D,
   points: Pt[],
@@ -483,8 +518,14 @@ type ImageState = {
   flipV: boolean;
   filters: ImageFilters;
   warpMesh: WarpMesh | null; // null = no warp
-  mask: DesignMask | null;   // null = design is not clipped
-};
+  mask: DesignMask | null; // null = design is not clipped
+  /**
+   * Shapes the artwork is cut away behind — pin holes, ejection slots, anything
+   * the laser must not mark. Optional because designs saved before keep-outs
+   * existed do not carry the field.
+   */
+  keepOuts?: DesignMask[];
+  };
 
 type MaterialSize = {
   widthIn: number;
@@ -1663,10 +1704,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
       // A shape mask clips in canvas space, so the design is drawn into its own
       // layer first and clipped before compositing (PowerClip behaviour).
+      const keepOuts = design.keepOuts ?? [];
       let maskLayer: HTMLCanvasElement | null = null;
       let maskLayerCtx: CanvasRenderingContext2D | null = null;
       let g: CanvasRenderingContext2D = ctx;
-      if (design.mask) {
+      if (design.mask || keepOuts.length > 0) {
         maskLayer = document.createElement("canvas");
         maskLayer.width = Math.round(displayWidth * dpr);
         maskLayer.height = Math.round(displayHeight * dpr);
@@ -1715,13 +1757,24 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       }
       g.restore();
 
-      if (maskLayer && design.mask) {
-        // The layer is device-sized, so the mask geometry is scaled to match it
+      if (maskLayer) {
+        // The layer is device-sized, so the shape geometry is scaled to match it
         // before being punched in, then composited back at display size. The
-        // masking itself runs at 1:1 so the clipped edge stays sharp.
+        // shaping itself runs at 1:1 so the clipped edge stays sharp.
         maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
-        applyMaskToCanvas(maskLayer, design.mask, dpr, dpr);
+        if (design.mask) applyMaskToCanvas(maskLayer, design.mask, dpr, dpr);
+        // Keep-outs cut the artwork away: nothing lands where the part has an
+        // opening the laser must not mark.
+        for (const keepOut of keepOuts) {
+          punchMaskFromCanvas(maskLayer, keepOut, dpr, dpr);
+        }
         ctx.drawImage(maskLayer, 0, 0, displayWidth, displayHeight);
+      }
+      
+      // Outlines are screen furniture, drawn straight onto the workspace canvas,
+      // so they never reach an export.
+      for (const keepOut of keepOuts) {
+        strokeShapeOutline(ctx, keepOut, "rgba(244,63,94,0.95)");
       }
     }
 
@@ -2773,11 +2826,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
 
       // Mask clips at export resolution so the clipped edge stays sharp.
+      const keepOuts = design.keepOuts ?? [];
       let maskLayer: HTMLCanvasElement | null = null;
       let g: CanvasRenderingContext2D = ctx;
-      if (design.mask) {
-        maskLayer = document.createElement("canvas");
-        maskLayer.width = expW;
+      if (design.mask || keepOuts.length > 0) {
+      maskLayer = document.createElement("canvas");
+      maskLayer.width = expW;
         maskLayer.height = expH;
         const layerCtx = maskLayer.getContext("2d");
         if (layerCtx) {
@@ -2817,8 +2871,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       }
       g.restore();
 
-      if (maskLayer && design.mask) {
-        applyMaskToCanvas(maskLayer, design.mask, scaleX, scaleY);
+      if (maskLayer) {
+        if (design.mask) applyMaskToCanvas(maskLayer, design.mask, scaleX, scaleY);
+        for (const keepOut of keepOuts) {
+          punchMaskFromCanvas(maskLayer, keepOut, scaleX, scaleY);
+        }
         ctx.drawImage(maskLayer, 0, 0);
       }
     }
@@ -3470,27 +3527,113 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const removeMask = useCallback(() => {
     commitDesignUpdate((prev) => ({ ...prev, mask: null }));
   }, [commitDesignUpdate]);
+  
+  // --- Keep-outs: the openings the laser must not mark ---
+  const [selectedKeepOut, setSelectedKeepOut] = useState<number | null>(null);
+  const keepOuts = design?.keepOuts ?? [];
+  
+  const updateKeepOutContinuously = useCallback(
+    (index: number, updater: (shape: DesignMask) => DesignMask) => {
+      updateDesignContinuously((prev) => {
+        const list = prev.keepOuts ?? [];
+        if (!list[index]) return prev;
+        return {
+          ...prev,
+          keepOuts: list.map((shape, i) => (i === index ? updater(shape) : shape)),
+        };
+      });
+    },
+    [updateDesignContinuously]
+  );
+  
+  const commitKeepOut = useCallback(
+    (index: number, updater: (shape: DesignMask) => DesignMask) => {
+      commitDesignUpdate((prev) => {
+        const list = prev.keepOuts ?? [];
+        if (!list[index]) return prev;
+        return {
+          ...prev,
+          keepOuts: list.map((shape, i) => (i === index ? updater(shape) : shape)),
+        };
+      });
+    },
+    [commitDesignUpdate]
+  );
+  
+  /** Drop a keep-out onto the part, centred and selected so it can be dragged. */
+  const addKeepOut = useCallback(
+    (shapeId = "ellipse") => {
+      const box = fillShape;
+      const size = Math.max(12, Math.min(box.w, box.h) * 0.2);
+      const keepOut = createDesignMask(
+        shapeId,
+        { x: box.x + box.w / 2 - size / 2, y: box.y + box.h / 2 - size / 2, w: size, h: size },
+        { inset: 1, lockAspect: true }
+      );
+      const nextIndex = (design?.keepOuts ?? []).length;
+      commitDesignUpdate((prev) => ({ ...prev, keepOuts: [...(prev.keepOuts ?? []), keepOut] }));
+      setSelectedKeepOut(nextIndex);
+    },
+    [design?.keepOuts, fillShape, commitDesignUpdate]
+  );
+  
+  const removeKeepOut = useCallback(
+    (index: number) => {
+      commitDesignUpdate((prev) => ({
+        ...prev,
+        keepOuts: (prev.keepOuts ?? []).filter((_, i) => i !== index),
+      }));
+      setSelectedKeepOut((current) => {
+        if (current === null || current === index) return null;
+        return current > index ? current - 1 : current;
+      });
+    },
+    [commitDesignUpdate]
+  );
+  
+  const changeKeepOutShape = useCallback(
+    (index: number, shapeId: string) => {
+      commitDesignUpdate((prev) => {
+        const list = prev.keepOuts ?? [];
+        if (!list[index]) return prev;
+        return {
+          ...prev,
+          keepOuts: list.map((shape, i) => (i === index ? changeMaskShape(shape, shapeId) : shape)),
+        };
+      });
+    },
+    [commitDesignUpdate]
+  );
 
-  const handleMaskPointerDown = useCallback(
-    (e: React.PointerEvent, mode: "move" | DesignResizeHandle) => {
-      if (!design?.mask) return;
+  /**
+   * Drag or resize a shape on the canvas: the clipping mask ("mask") or one of
+   * the keep-outs, by index. They share the handle maths so they behave alike.
+   */
+  const handleShapePointerDown = useCallback(
+    (e: React.PointerEvent, target: "mask" | number, mode: "move" | DesignResizeHandle) => {
+      const start: DesignMask | undefined =
+        target === "mask" ? design?.mask ?? undefined : design?.keepOuts?.[target];
+      if (!start) return;
       e.stopPropagation();
       e.preventDefault();
       e.currentTarget.setPointerCapture?.(e.pointerId);
-
-      const start: DesignMask = { ...design.mask };
-      const shape = getMaskShape(start.shapeId);
+  
+      const definition = getMaskShape(start.shapeId);
+      const apply = (updater: (shape: DesignMask) => DesignMask) =>
+        target === "mask"
+          ? updateMaskContinuously(updater)
+          : updateKeepOutContinuously(target, updater);
       const startX = e.clientX;
       const startY = e.clientY;
       const MIN_SIZE = 16;
-
+  
       const onMove = (ev: PointerEvent) => {
         const dx = (ev.clientX - startX) / viewRef.current.zoom;
         const dy = (ev.clientY - startY) / viewRef.current.zoom;
-
-        updateMaskContinuously((mask) => {
+  
+        apply((current) => {
           if (mode === "move") {
-            return { ...mask, x: start.x + dx, y: start.y + dy };
+            return { ...current, x: start.x + dx, y: start.y + dy };
           }
 
           const stretchesE = mode === "e" || mode === "ne" || mode === "se";
@@ -3511,8 +3654,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
           let w = x2 - x1;
           let h = y2 - y1;
 
-          if (mask.lockAspect) {
-            const aspect = shape.aspect > 0 ? shape.aspect : 1;
+          if (current.lockAspect) {
+          const aspect = definition.aspect > 0 ? definition.aspect : 1;
             if (stretchesE || stretchesW) {
               const centerY = start.y + start.h / 2;
               h = w / aspect;
@@ -3526,7 +3669,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             if (stretchesN) y1 = y2 - h;
           }
 
-          return { ...mask, x: x1, y: y1, w, h };
+          return { ...current, x: x1, y: y1, w, h };
         });
       };
 
@@ -3541,7 +3684,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
     },
-    [design, updateMaskContinuously, commitCurrentDesign]
+    [design, updateMaskContinuously, updateKeepOutContinuously, commitCurrentDesign]
   );
 
   /** Corner-drag scaling for the selected object. */
@@ -4999,7 +5142,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                         cursor: "move",
                         touchAction: "none",
                       }}
-                      onPointerDown={(e) => handleMaskPointerDown(e, "move")}
+                      onPointerDown={(e) => handleShapePointerDown(e, "mask", "move")}
                     >
                       <Move className="h-3 w-3" />
                       {getMaskShape(mask.shapeId).name}
@@ -5017,13 +5160,86 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                           cursor: h.cursor,
                           touchAction: "none",
                         }}
-                        onPointerDown={(e) => handleMaskPointerDown(e, h.id)}
+                        onPointerDown={(e) => handleShapePointerDown(e, "mask", h.id)}
                       />
                     ))}
                   </>
                 );
               })()}
 
+              {/* Selected keep-out — where the laser must not mark */}
+              {design && selectedKeepOut !== null && design.keepOuts?.[selectedKeepOut] && !warpMode && !penTraceActive && (() => {
+                const keepOut = design.keepOuts[selectedKeepOut];
+                const cx = keepOut.x + keepOut.w / 2;
+                const cy = keepOut.y + keepOut.h / 2;
+                const HW = 16;
+                const halfHandle = HW / 2;
+                const rotation = (keepOut.rotation * Math.PI) / 180;
+                const cos = Math.cos(rotation);
+                const sin = Math.sin(rotation);
+                const clampCenter = (value: number, max: number) =>
+                  Math.min(Math.max(value, halfHandle), max - halfHandle);
+                const rotatePoint = (x: number, y: number) => {
+                  const dx = x - cx;
+                  const dy = y - cy;
+                  return { x: cx + dx * cos - dy * sin, y: cy + dx * sin + dy * cos };
+                };
+                const handlePoint = (x: number, y: number) => {
+                  const point = rotatePoint(x, y);
+                  const p = toView(
+                    clampCenter(point.x, displayWidth),
+                    clampCenter(point.y, displayHeight)
+                  );
+                  return { left: p.x - halfHandle, top: p.y - halfHandle };
+                };
+                const handles: { id: DesignResizeHandle; left: number; top: number; cursor: string }[] = [
+                  { id: "nw", ...handlePoint(keepOut.x,             keepOut.y),             cursor: "nwse-resize" },
+                  { id: "n",  ...handlePoint(cx,                    keepOut.y),             cursor: "ns-resize" },
+                  { id: "ne", ...handlePoint(keepOut.x + keepOut.w, keepOut.y),             cursor: "nesw-resize" },
+                  { id: "e",  ...handlePoint(keepOut.x + keepOut.w, cy),                    cursor: "ew-resize" },
+                  { id: "se", ...handlePoint(keepOut.x + keepOut.w, keepOut.y + keepOut.h), cursor: "nwse-resize" },
+                  { id: "s",  ...handlePoint(cx,                    keepOut.y + keepOut.h), cursor: "ns-resize" },
+                  { id: "sw", ...handlePoint(keepOut.x,             keepOut.y + keepOut.h), cursor: "nesw-resize" },
+                  { id: "w",  ...handlePoint(keepOut.x,             cy),                    cursor: "ew-resize" },
+                ];
+                return (
+                  <>
+                    <div
+                      data-engraving-keepout-drag
+                      aria-label={t("panel.keepOut.label")}
+                      className="absolute z-[75] flex items-center gap-1 rounded-full bg-rose-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow-[0_0_0_2px_rgba(15,23,42,0.9),0_2px_8px_rgba(0,0,0,0.5)] whitespace-nowrap"
+                      style={{
+                        ...toView(
+                          Math.max(0, Math.min(keepOut.x, displayWidth - 90)),
+                          Math.max(0, keepOut.y - 22)
+                        ),
+                        cursor: "move",
+                        touchAction: "none",
+                      }}
+                      onPointerDown={(e) => handleShapePointerDown(e, selectedKeepOut, "move")}
+                    >
+                      <Ban className="h-3 w-3" />
+                      {t("panel.keepOut.label")}
+                    </div>
+                    {handles.map((h) => (
+                      <div
+                        key={h.id}
+                        data-engraving-keepout-handle={h.id}
+                        aria-label={`Resize keep-out ${h.id}`}
+                        className="absolute z-[70] box-border rounded-full border-[3px] border-rose-500 bg-white shadow-[0_0_0_2px_rgba(15,23,42,0.9),0_0_0_4px_rgba(255,255,255,0.65),0_3px_10px_rgba(0,0,0,0.55)]"
+                        style={{
+                          left: h.left, top: h.top,
+                          width: HW, height: HW,
+                          cursor: h.cursor,
+                          touchAction: "none",
+                        }}
+                        onPointerDown={(e) => handleShapePointerDown(e, selectedKeepOut, h.id)}
+                      />
+                    ))}
+                  </>
+                );
+              })()}
+              
               {/* Vector layer — selection box, scale handles and in-progress path */}
               {(() => {
                 const draftBox = vectorShapeDraft
@@ -6557,10 +6773,108 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       </div>
                     ) : (
                       <p className="text-[10px] text-muted-foreground opacity-70">
-                        {t("panel.mask.none")}
+                      {t("panel.mask.none")}
                       </p>
-                    )}
-                  </TabsContent>
+                      )}
+                      
+                      {/* Keep-outs — the openings the laser must not mark. Separate from the
+                          mask: the mask is the shape the art is clipped into, these are the
+                          holes cut out of it. */}
+                      <div className="space-y-2 border-t border-border/60 pt-3" data-keepouts>
+                        <div className="flex items-center justify-between">
+                          <span className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">
+                            {t("panel.keepOut.title")}
+                          </span>
+                          <Button variant="secondary" size="xs" onClick={() => addKeepOut("ellipse")}>
+                            <Plus className="mr-1 h-3 w-3" /> {t("panel.keepOut.add")}
+                          </Button>
+                        </div>
+                        <p className="text-[10px] text-muted-foreground leading-relaxed">
+                          {t("panel.keepOut.hint")}
+                        </p>
+                      
+                        {keepOuts.length === 0 ? (
+                          <p className="text-[10px] text-muted-foreground opacity-70">
+                            {t("panel.keepOut.none")}
+                          </p>
+                        ) : (
+                          <div className="space-y-1">
+                            {keepOuts.map((keepOut, index) => (
+                              <div
+                                key={index}
+                                className={`flex items-center gap-1 rounded-md px-2 py-1 ${
+                                  selectedKeepOut === index ? "bg-rose-500/15" : "hover:bg-secondary/60"
+                                }`}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => setSelectedKeepOut(index)}
+                                  className="flex flex-1 items-center gap-1.5 text-left text-[11px]"
+                                >
+                                  <span className="font-medium">{getMaskShape(keepOut.shapeId).name}</span>
+                                  <span className="text-muted-foreground">
+                                    {Math.round(displayToInches(keepOut.w, displayWidth, material.widthIn) * 100) / 100}" wide
+                                  </span>
+                                </button>
+                                <Button
+                                  variant="ghost"
+                                  size="icon-xs"
+                                  aria-label={t("panel.keepOut.remove")}
+                                  onClick={() => removeKeepOut(index)}
+                                >
+                                  <Trash2 className="h-3 w-3" />
+                                </Button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      
+                        {selectedKeepOut !== null && keepOuts[selectedKeepOut] && (
+                          <div className="space-y-2 pt-1">
+                            <div className="flex items-center justify-between gap-2">
+                              <span className="text-xs text-muted-foreground">{t("panel.keepOut.shape")}</span>
+                              <Select
+                                value={keepOuts[selectedKeepOut].shapeId}
+                                onValueChange={(value) => changeKeepOutShape(selectedKeepOut, value)}
+                              >
+                                <SelectTrigger className="h-7 w-[140px] text-xs">
+                                  <SelectValue />
+                                </SelectTrigger>
+                                <SelectContent>
+                                  {MASK_SHAPES.map((shape) => (
+                                    <SelectItem key={shape.id} value={shape.id} className="text-xs">
+                                      {shape.name}
+                                    </SelectItem>
+                                  ))}
+                                </SelectContent>
+                              </Select>
+                            </div>
+                            <div className="space-y-1.5">
+                              <div className="flex items-center justify-between">
+                                <span className="text-xs text-muted-foreground">{t("panel.mask.rotation")}</span>
+                                <span className="text-xs font-mono">
+                                  {Math.round(keepOuts[selectedKeepOut].rotation)}°
+                                </span>
+                              </div>
+                              <Slider
+                                value={[keepOuts[selectedKeepOut].rotation]}
+                                min={0} max={360} step={1}
+                                onValueChange={([v]) =>
+                                  updateKeepOutContinuously(selectedKeepOut, (shape) => ({ ...shape, rotation: v }))
+                                }
+                                onValueCommit={([v]) =>
+                                  commitKeepOut(selectedKeepOut, (shape) => ({ ...shape, rotation: v }))
+                                }
+                              />
+                            </div>
+                            <p className="text-[10px] text-muted-foreground leading-relaxed">
+                              {t("panel.keepOut.dragHint")}
+                            </p>
+                          </div>
+                        )}
+                      </div>
+                      
+                      </TabsContent>
                 </Tabs>
 
                 {/* Keyboard shortcuts */}
