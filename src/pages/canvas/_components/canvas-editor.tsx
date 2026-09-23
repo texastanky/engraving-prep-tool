@@ -2587,39 +2587,58 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
   // Quick actions
   /**
-   * Bounding box of the traced part outline.
+   * The shape Fill and Fit work against.
    *
-   * Fill and Fit target this rather than the canvas. The canvas *is* the
-   * material, so targeting it only looked right while the part and the material
-   * happened to be the same size. Whether the outline is closed, and whether the
-   * artwork is being clipped to it, does not change what it means: tracing the
-   * part is what says "this is the part".
+   * Priority: the traced part outline (the template), then a clipping mask that
+   * keeps its inside, then the material itself. `kind` says whether the artwork
+   * must also be cut down to that shape — an outline and a mask are shapes, while
+   * the material is only a rectangle.
    */
-  const templateBounds = useMemo(() => {
-    if (penTracePoints.length < 3) return null;
-    const xs = penTracePoints.map((point) => point.x);
-    const ys = penTracePoints.map((point) => point.y);
-    const x = Math.min(...xs);
-    const y = Math.min(...ys);
-    const w = Math.max(...xs) - x;
-    const h = Math.max(...ys) - y;
-    if (w <= 0 || h <= 0) return null;
-    return { x, y, w, h };
-  }, [penTracePoints]);
+  const fillShape = useMemo<{
+    x: number;
+    y: number;
+    w: number;
+    h: number;
+    kind: "trace" | "mask" | "material";
+    closed: boolean;
+  }>(() => {
+    if (penTracePoints.length >= 3) {
+      const xs = penTracePoints.map((point) => point.x);
+      const ys = penTracePoints.map((point) => point.y);
+      const x = Math.min(...xs);
+      const y = Math.min(...ys);
+      const w = Math.max(...xs) - x;
+      const h = Math.max(...ys) - y;
+      if (w > 0 && h > 0) return { x, y, w, h, kind: "trace", closed: penTraceClosed };
+    }
+    const mask = design?.mask;
+    if (mask && !mask.invert && mask.w > 0 && mask.h > 0) {
+      return { x: mask.x, y: mask.y, w: mask.w, h: mask.h, kind: "mask", closed: true };
+    }
+    return { x: 0, y: 0, w: displayWidth, h: displayHeight, kind: "material", closed: true };
+  }, [penTracePoints, penTraceClosed, design?.mask, displayWidth, displayHeight]);
 
   /**
    * Scale the artwork against the part.
    *
    * `cover` grows it until it fills the part, cropping whatever spills over;
    * `contain` shrinks it until all of the artwork is inside the part. Both centre
-   * on the part outline when one has been traced (the material otherwise), and
-   * both keep the design's rotation — the scale is measured against the rotated
-   * bounds, so a rotated design still covers or fits as advertised.
+   * on the shape — the traced outline, a clipping mask, or the material — and
+   * both keep the design's rotation, measuring against the rotated bounds so a
+   * rotated design still covers or fits as advertised.
+   *
+   * Filling a shape means cutting the artwork down to it as well as sizing
+   * against it, so a traced outline turns the clip on. An open outline encloses
+   * nothing: better to say so than to quietly fill its bounding box.
    */
   const fitDesignToTarget = useCallback(
     (mode: "cover" | "contain") => {
       if (!design) return;
-      const target = templateBounds ?? { x: 0, y: 0, w: displayWidth, h: displayHeight };
+      const target = fillShape;
+      if (target.kind === "trace" && !target.closed) {
+        toast.error(t("toast.fillNeedsClosedTrace"));
+        return;
+      }
       const radians = (design.rotation * Math.PI) / 180;
       const cos = Math.abs(Math.cos(radians));
       const sin = Math.abs(Math.sin(radians));
@@ -2650,10 +2669,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         setDesignWidthInput(inToMm(widthIn).toFixed(1));
         setDesignHeightInput(inToMm(heightIn).toFixed(1));
       }
+
+      if (target.kind === "trace" && !clipDesignToTrace) {
+        setClipDesignToTrace(true);
+        toast.message(t("toast.fillTrimmedToShape"));
+      }
     },
     [
       design, displayWidth, displayHeight, material.heightIn, material.widthIn,
-      templateBounds, unit, commitDesignUpdate,
+      fillShape, unit, commitDesignUpdate, clipDesignToTrace, t,
     ]
   );
 

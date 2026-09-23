@@ -247,6 +247,8 @@
   "toast.bgRemoved": "Fondo eliminado.",
   "toast.cornersRounded": "Esquinas redondeadas.",
   "toast.penTraceNeedLine": "Agrega al menos dos puntos de trazo primero.",
+  "toast.fillNeedsClosedTrace": "Cierra el contorno trazado primero: Rellenar usa la forma que crea, no el rectángulo que la rodea.",
+  "toast.fillTrimmedToShape": "Dibujo ajustado al contorno y recortado a su forma.",
   "toast.penTraceNeedPoints": "Agrega al menos tres puntos antes de cerrar el trazo.",
   "toast.penTraceLoaded": "Trazo con pluma cargado como capa de diseño.",
   "toast.penTracePresetSaved": "{{name}} guardado para después.",
