@@ -3,6 +3,7 @@ import {
   ellipseSubpaths,
   hitTestObject,
   lineSubpaths,
+  longAxisAngle,
   objectBounds,
   objectFromSubpaths,
   objectCenter,
@@ -200,5 +201,46 @@ describe("samplePath", () => {
     const last = points.at(-1);
     expect(last?.x).toBeCloseTo(10, 5);
     expect(last?.y).toBeCloseTo(0, 5);
+  });
+});
+
+describe("longAxisAngle", () => {
+  const rotatedRect = (degrees: number, w = 200, h = 60) => {
+    const rad = (degrees * Math.PI) / 180;
+    const cos = Math.cos(rad);
+    const sin = Math.sin(rad);
+    return [
+      { x: 0, y: 0 },
+      { x: w, y: 0 },
+      { x: w, y: h },
+      { x: 0, y: h },
+    ].map((p) => ({ x: p.x * cos - p.y * sin, y: p.x * sin + p.y * cos }));
+  };
+
+  it("reads zero for a part already square to the bed", () => {
+    expect(longAxisAngle(rotatedRect(0))).toBeCloseTo(0, 6);
+  });
+
+  it("reads the tilt of a part lying at an angle", () => {
+    expect(longAxisAngle(rotatedRect(30))).toBeCloseTo(30, 6);
+    expect(longAxisAngle(rotatedRect(-12.5))).toBeCloseTo(-12.5, 6);
+  });
+
+  it("folds a part at 150 degrees onto the same line as -30", () => {
+    expect(longAxisAngle(rotatedRect(150))).toBeCloseTo(-30, 6);
+  });
+
+  it("ignores stray points that do not change the outline", () => {
+    const withNoise = [...rotatedRect(20), { x: 50, y: 12 }, { x: 120, y: 20 }];
+    expect(longAxisAngle(withNoise)).toBeCloseTo(20, 6);
+  });
+
+  it("has no opinion about a square part", () => {
+    expect(longAxisAngle(rotatedRect(0, 100, 100))).toBeNull();
+    expect(longAxisAngle(rotatedRect(45, 90, 88))).toBeNull();
+  });
+
+  it("needs a shape to measure", () => {
+    expect(longAxisAngle([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBeNull();
   });
 });

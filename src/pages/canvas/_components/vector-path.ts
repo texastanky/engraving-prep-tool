@@ -358,6 +358,80 @@ export function scaleSubpathsToUnit(subpaths: SubPath[], scale: UnitScale): SubP
   return mapSubpaths(subpaths, (p) => ({ x: p.x * scale.sx, y: p.y * scale.sy }));
 }
 
+/** Convex hull of a point set, by monotone chain. Collinear points are dropped. */
+function convexHull(points: VecPt[]): VecPt[] {
+  const sorted = [...points].sort((a, b) => (a.x === b.x ? a.y - b.y : a.x - b.x));
+  const cross = (o: VecPt, a: VecPt, b: VecPt) =>
+    (a.x - o.x) * (b.y - o.y) - (a.y - o.y) * (b.x - o.x);
+  const chain = (input: VecPt[]) => {
+    const run: VecPt[] = [];
+    for (const point of input) {
+      while (run.length >= 2 && cross(run[run.length - 2], run[run.length - 1], point) <= 0) {
+        run.pop();
+      }
+      run.push(point);
+    }
+    return run;
+  };
+  const lower = chain(sorted);
+  const upper = chain([...sorted].reverse());
+  // The first point of each chain is the last point of the other.
+  return [...lower.slice(0, -1), ...upper.slice(0, -1)];
+}
+
+/**
+ * Direction of a shape's long axis, in degrees from the x-axis.
+ *
+ * Fits the minimum-area rectangle around the outline's convex hull — the classic
+ * rotating-calipers answer to "which way does this part run" — and returns the
+ * direction of its longer side, folded into (-90, 90] so a part at 30° and the
+ * same part at 210° read alike.
+ *
+ * `null` means the shape is too square for a long axis to mean anything (a round
+ * plate, a cube): callers should leave the artwork where it is rather than spin
+ * it on a coin toss.
+ */
+export function longAxisAngle(points: VecPt[], minAspect = 1.1): number | null {
+  if (points.length < 3) return null;
+  const hull = convexHull(points);
+  if (hull.length < 3) return null;
+
+  let best: { area: number; angle: number; w: number; h: number } | null = null;
+  for (let i = 0; i < hull.length; i++) {
+    const a = hull[i];
+    const b = hull[(i + 1) % hull.length];
+    const angle = Math.atan2(b.y - a.y, b.x - a.x);
+    const cos = Math.cos(-angle);
+    const sin = Math.sin(-angle);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    let minY = Infinity;
+    let maxY = -Infinity;
+    for (const point of hull) {
+      // Rotate the point into the edge's frame and track the extent.
+      const x = point.x * cos - point.y * sin;
+      const y = point.x * sin + point.y * cos;
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+      if (y < minY) minY = y;
+      if (y > maxY) maxY = y;
+    }
+    const w = maxX - minX;
+    const h = maxY - minY;
+    if (!best || w * h < best.area) best = { area: w * h, angle, w, h };
+  }
+  if (!best) return null;
+
+  const longSide = Math.max(best.w, best.h);
+  const shortSide = Math.min(best.w, best.h);
+  if (shortSide <= 1e-6 || longSide / shortSide < minAspect) return null;
+
+  const radians = best.w >= best.h ? best.angle : best.angle + Math.PI / 2;
+  const degrees = (radians * 180) / Math.PI;
+  const folded = ((((degrees + 90) % 180) + 180) % 180) - 90;
+  return folded === -90 ? 90 : folded;
+}
+
 export type SegmentHit = {
   subpathIndex: number;
   segmentIndex: number;

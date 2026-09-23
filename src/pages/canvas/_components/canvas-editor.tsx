@@ -98,6 +98,7 @@ import {
   ellipseSubpaths,
   hitTestObject,
   lineSubpaths,
+  longAxisAngle,
   objectBounds,
   moveAnchor,
   moveHandle,
@@ -2630,16 +2631,32 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
    * Filling a shape means cutting the artwork down to it as well as sizing
    * against it, so a traced outline turns the clip on. An open outline encloses
    * nothing: better to say so than to quietly fill its bounding box.
+   *
+   * `align` first turns the artwork onto the part's long axis, for a part lying
+   * at an angle on the bed. A shape with no long axis to speak of (a round
+   * plate) is left at whatever angle it already had.
    */
   const fitDesignToTarget = useCallback(
-    (mode: "cover" | "contain") => {
+    (mode: "cover" | "contain", align = false) => {
       if (!design) return;
       const target = fillShape;
       if (target.kind === "trace" && !target.closed) {
         toast.error(t("toast.fillNeedsClosedTrace"));
         return;
       }
-      const radians = (design.rotation * Math.PI) / 180;
+
+      let rotation = design.rotation;
+      const axis = align && target.kind === "trace" ? longAxisAngle(penTracePoints) : null;
+      if (axis !== null) {
+        // The artwork's own long side goes along the part's, so the pattern runs
+        // down the part rather than across it.
+        const artIsWide = design.naturalWidth >= design.naturalHeight;
+        const degrees = artIsWide ? axis : axis + 90;
+        rotation = ((degrees % 360) + 360) % 360;
+      }
+      const aligned = rotation !== design.rotation;
+
+      const radians = (rotation * Math.PI) / 180;
       const cos = Math.abs(Math.cos(radians));
       const sin = Math.abs(Math.sin(radians));
       const boxW = design.naturalWidth * cos + design.naturalHeight * sin;
@@ -2653,6 +2670,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
       commitDesignUpdate((current) => ({
         ...current,
+        rotation,
         scale,
         scaleX: 1,
         scaleY: 1,
@@ -2672,17 +2690,30 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
 
       if (target.kind === "trace" && !clipDesignToTrace) {
         setClipDesignToTrace(true);
+      }
+      if (aligned) {
+        toast.success(t("toast.fillAlignedToPart"));
+      } else if (target.kind === "trace" && !clipDesignToTrace) {
         toast.message(t("toast.fillTrimmedToShape"));
       }
     },
     [
       design, displayWidth, displayHeight, material.heightIn, material.widthIn,
-      fillShape, unit, commitDesignUpdate, clipDesignToTrace, t,
+      fillShape, unit, commitDesignUpdate, clipDesignToTrace, t, penTracePoints,
     ]
   );
 
   /** Fill the part: the artwork covers it, cropping whatever spills over. */
   const handleFill = useCallback(() => fitDesignToTarget("cover"), [fitDesignToTarget]);
+
+  /**
+   * Align fill: turn the artwork onto the part's long axis first, so a part
+   * lying at an angle on the bed gets a pattern that runs along it.
+   */
+  const handleAlignFill = useCallback(
+    () => fitDesignToTarget("cover", true),
+    [fitDesignToTarget]
+  );
 
   /** Fit the part: every bit of the artwork stays visible inside it. */
   const handleFit = useCallback(() => fitDesignToTarget("contain"), [fitDesignToTarget]);
@@ -5464,6 +5495,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                 <Button variant="secondary" size="sm" onClick={handleFill}>
                   <Maximize2 className="mr-1 h-3 w-3" /> {t("panel.design.fill")}
                 </Button>
+                <Button
+                  variant="secondary"
+                  size="sm"
+                  onClick={handleAlignFill}
+                  title={t("panel.design.alignFillHint")}
+                >
+                  <RotateCw className="mr-1 h-3 w-3" /> {t("panel.design.alignFill")}
+                </Button>
                 <Button variant="secondary" size="sm" onClick={handleFit}>
                   <Minimize2 className="mr-1 h-3 w-3" /> {t("panel.design.fit")}
                 </Button>
@@ -6245,11 +6284,23 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       />
                     </div>
 
-                    {/* Quick position — Fill crops to the part, Fit keeps all of it */}
+                    {/* Quick position — Fill crops to the part, Fit keeps all of it,
+                        Align fill turns the artwork onto the part's angle first. */}
                     <div className="flex gap-2 pt-1">
                       <Button variant="secondary" size="sm" className="flex-1" onClick={handleFill}>
                         <Maximize2 className="mr-1 h-3 w-3" /> {t("panel.design.fill")}
                       </Button>
+                      <Button
+                        variant="secondary"
+                        size="sm"
+                        className="flex-1"
+                        onClick={handleAlignFill}
+                        title={t("panel.design.alignFillHint")}
+                      >
+                        <RotateCw className="mr-1 h-3 w-3" /> {t("panel.design.alignFill")}
+                      </Button>
+                    </div>
+                    <div className="flex gap-2">
                       <Button variant="secondary" size="sm" className="flex-1" onClick={handleFit}>
                         <Minimize2 className="mr-1 h-3 w-3" /> {t("panel.design.fit")}
                       </Button>
