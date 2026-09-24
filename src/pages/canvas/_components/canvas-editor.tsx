@@ -581,11 +581,21 @@ type ImageState = {
    */
   keepOuts?: DesignMask[];
   /**
-   * Copies of the part placed elsewhere on the bed, as offsets from the traced
-   * outline. A copy is the same outline with the same artwork placement and the
-   * same keep-outs, so a run of parts comes out identical.
+   * Parts on the bed, as offsets from the traced outline. One design is placed
+   * over the whole bed and shows through every part, so each piece gets the
+   * slice of the artwork that falls on it and the lines run across the seams.
+   *
+   * `points` is the part's own outline when it has one (a saved trace of a
+   * different piece); without it the traced outline is used.
    */
-  partCopies?: { id: string; dx: number; dy: number }[];
+  partCopies?: {
+    id: string;
+    dx: number;
+    dy: number;
+    name?: string;
+    points?: Pt[];
+    closed?: boolean;
+  }[];
   };
 
 type MaterialSize = {
@@ -1610,6 +1620,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             ...copy,
             dx: copy.dx * kx,
             dy: copy.dy * ky,
+            points: copy.points
+              ? copy.points.map((point) => ({ x: point.x * kx, y: point.y * ky }))
+              : undefined,
           }));
         }
         return next;
@@ -1881,7 +1894,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       // layer first and clipped before compositing (PowerClip behaviour).
       const keepOuts = design.keepOuts ?? [];
       const copies = design.partCopies ?? [];
-      const placements = [{ dx: 0, dy: 0 }, ...copies.map((copy) => ({ dx: copy.dx, dy: copy.dy }))];
+      // The traced part first, then every placed part. A part carries its own
+      // outline when it came from a saved trace; otherwise it uses this one.
+      const placements: { dx: number; dy: number; points?: Pt[]; closed?: boolean }[] = [
+        { dx: 0, dy: 0 },
+        ...copies,
+      ];
       let maskLayer: HTMLCanvasElement | null = null;
       let maskLayerCtx: CanvasRenderingContext2D | null = null;
       let g: CanvasRenderingContext2D = ctx;
@@ -1918,19 +1936,26 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       );
       
       for (const placement of placements) {
-        g.save();
-        if (placement.dx !== 0 || placement.dy !== 0) {
-          g.translate(placement.dx, placement.dy);
-        }
-        if (shouldClipDesign) {
-          clipToTracePath(g, penTracePoints);
-        }
-        // With copies on the bed the mask has to bound this part's artwork rather
-        // than composite over the layer, which holds every part at once.
-        if (design.mask && copies.length > 0) {
-          clipToShapePath(g, design.mask);
-        }
-        if (design.warpMesh) {
+  g.save();
+  // Clip to this part's outline, then let the transform go so the *shared*
+  // artwork draws in its own place: each part shows the slice of the design
+  // that falls on it, rather than a repeat of the whole thing.
+  const outline = placement.points ?? penTracePoints;
+    if ((shouldClipDesign || copies.length > 0) && outline.length >= 3) {
+    if (placement.dx !== 0 || placement.dy !== 0) {
+      g.translate(placement.dx, placement.dy);
+    }
+    clipToTracePath(g, outline);
+    if (placement.dx !== 0 || placement.dy !== 0) {
+      g.translate(-placement.dx, -placement.dy);
+    }
+  }
+  // With parts on the bed the mask has to bound the artwork rather than
+  // composite over the layer, which holds every part at once.
+  if (design.mask && copies.length > 0) {
+    clipToShapePath(g, design.mask);
+  }
+  if (design.warpMesh) {
           drawWarpedImage(g, filtered, design.warpMesh, design.opacity);
         } else {
           g.save();
@@ -3065,7 +3090,12 @@ const handlePenTracePointMouseDown = useCallback(
       const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
       // Every part on the bed draws the same artwork, at its own offset.
       const copies = design.partCopies ?? [];
-      const placements = [{ dx: 0, dy: 0 }, ...copies.map((copy) => ({ dx: copy.dx, dy: copy.dy }))];
+      // The traced part first, then every placed part. A part carries its own
+      // outline when it came from a saved trace; otherwise it uses this one.
+      const placements: { dx: number; dy: number; points?: Pt[]; closed?: boolean }[] = [
+        { dx: 0, dy: 0 },
+        ...copies,
+      ];
       
       // Mask clips at export resolution so the clipped edge stays sharp.
       const keepOuts = design.keepOuts ?? [];
@@ -3084,14 +3114,18 @@ const handlePenTracePointMouseDown = useCallback(
       }
 
       for (const placement of placements) {
-        g.save();
-        g.translate(placement.dx * scaleX, placement.dy * scaleY);
-        if (shouldClipDesign) {
-          clipToTracePath(g, penTracePoints, scaleX, scaleY);
-        }
-        if (design.mask && copies.length > 0) {
-          clipToShapePath(g, design.mask, scaleX, scaleY);
-        }
+g.save();
+// Clip to this part's outline; the shared artwork draws in its own place, so
+// each part carries its own slice and the lines continue across the seams.
+const outline = placement.points ?? penTracePoints;
+if ((shouldClipDesign || copies.length > 0) && outline.length >= 3) {
+  g.translate(placement.dx * scaleX, placement.dy * scaleY);
+  clipToTracePath(g, outline, scaleX, scaleY);
+  g.translate(-placement.dx * scaleX, -placement.dy * scaleY);
+}
+if (design.mask && copies.length > 0) {
+clipToShapePath(g, design.mask, scaleX, scaleY);
+}
         if (design.warpMesh) {
             const m = design.warpMesh;
             const scaledMesh: WarpMesh = {
@@ -3927,6 +3961,45 @@ const handlePenTracePointMouseDown = useCallback(
             }));
             toast.success(t("toast.partRepeated"));
           }, [design, penTracePoints, commitDesignUpdate, t]);
+        
+          /**
+           * Place a saved trace on the bed as another part. Each part keeps its own
+           * outline while the design stays where it is, so the pieces between them share
+           * one continuous artwork.
+           */
+          const placeSavedPartOnBed = useCallback(
+            (preset: CustomPreset) => {
+              if (!design) {
+                toast.error(t("toast.keepOutNeedsDesign"));
+                return;
+              }
+              if (!hasSavedTracePoints(preset)) {
+                toast.error(t("toast.repeatNeedsOutline"));
+                return;
+              }
+              const points = scaleTracePoints(preset.tracePoints, displayWidth, displayHeight);
+              const xs = points.map((point) => point.x);
+              const ys = points.map((point) => point.y);
+              const width = Math.max(...xs) - Math.min(...xs);
+              const index = (design.partCopies ?? []).length + 1;
+              commitDesignUpdate((current) => ({
+                ...current,
+                partCopies: [
+                  ...(current.partCopies ?? []),
+                  {
+                    id: `part-${Date.now().toString(36)}-${index}`,
+                    name: preset.name,
+                    dx: Math.round((width + width * 0.1) * index),
+                    dy: 0,
+                    points,
+                    closed: preset.traceClosed ?? true,
+                  },
+                ],
+              }));
+              toast.success(t("toast.partPlaced", { name: preset.name }));
+            },
+            [design, displayWidth, displayHeight, commitDesignUpdate, t]
+          );
         
           const removePartCopy = useCallback(
             (id: string) => {
@@ -6688,8 +6761,8 @@ onClick={downloadPenTraceSvg}
                                       key={copy.id}
                                       className="flex items-center gap-1.5 rounded-md border border-border/50 bg-background/50 p-1.5"
                                     >
-                                      <span className="w-14 shrink-0 text-[11px] font-medium">
-                                        {t("panel.bed.part", { count: index + 2 })}
+                                      <span className="w-14 shrink-0 truncate text-[11px] font-medium" title={copy.name}>
+                                      {copy.name ?? t("panel.bed.part", { count: index + 2 })}
                                       </span>
                                       <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
                                         X
@@ -6770,8 +6843,18 @@ onClick={downloadPenTraceSvg}
                         </button>
                         <Button
                           variant="ghost"
-                          size="icon"
-                          className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
+                          size="icon-xs"
+                          className="shrink-0"
+                          aria-label={t("panel.bed.place")}
+                          title={t("panel.bed.placeHint")}
+                          onClick={() => placeSavedPartOnBed(preset)}
+                        >
+                          <Plus className="h-3.5 w-3.5" />
+                        </Button>
+                        <Button
+                        variant="ghost"
+                        size="icon"
+                        className="h-7 w-7 shrink-0 text-muted-foreground hover:text-destructive"
                           aria-label={t("panel.penTrace.deleteSavedPart", { name: preset.name })}
                           onClick={() => deleteSavedTracePreset(preset)}
                         >

@@ -35,8 +35,18 @@ export type CustomPresetSetup = {
   };
   mask?: DesignMask | null;
   keepOuts?: DesignMask[];
-  /** Other parts on the bed, as offsets from the traced outline. */
-  partCopies?: { id: string; dx: number; dy: number }[];
+  /**
+   * Other parts on the bed, as offsets from the traced outline. A part may carry
+   * its own outline (a saved trace of a different piece).
+   */
+  partCopies?: {
+    id: string;
+    dx: number;
+    dy: number;
+    name?: string;
+    points?: { x: number; y: number }[];
+    closed?: boolean;
+  }[];
   clipToTrace?: boolean;
 };
 
