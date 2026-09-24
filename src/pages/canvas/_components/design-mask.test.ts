@@ -5,14 +5,17 @@ import {
   applyMaskToCanvas,
   changeMaskShape,
   createDesignMask,
+  createTracedKeepOut,
   featherRadius,
   fitAspectInside,
   fitMaskToBox,
   getMaskShape,
   maskPathData,
   polygonPath,
+  punchMaskFromCanvas,
   roundedRectPath,
   starPath,
+  TRACED_SHAPE_ID,
 } from "./design-mask.ts";
 
 const BOX = { x: 100, y: 50, w: 400, h: 300 };
@@ -304,5 +307,70 @@ describe("applyMaskToCanvas", () => {
     const composites = ops.filter((op) => op.op === "drawImage");
     expect(composites.length).toBeGreaterThanOrEqual(2);
     expect(composites.some((op) => String(op.args[1]).startsWith("blur("))).toBe(true);
+  });
+
+  it("erases the shape instead of clipping to it, which is the keep-out's job", () => {
+    const { ops, target } = setup();
+    punchMaskFromCanvas(target, createDesignMask("ellipse", { x: 0, y: 0, w: 400, h: 300 }));
+
+    const composites = ops.filter((op) => op.op === "composite").map((op) => op.args[0]);
+    expect(composites).toContain("destination-out");
+    expect(composites).not.toContain("destination-in");
+  });
+
+  it("draws a traced outline in place of a library shape", () => {
+    const { ops, target } = setup();
+    const keepOut = createTracedKeepOut([
+      { x: 100, y: 200 },
+      { x: 160, y: 204 },
+      { x: 158, y: 250 },
+      { x: 102, y: 246 },
+    ]);
+    expect(keepOut).not.toBeNull();
+    punchMaskFromCanvas(target, keepOut);
+
+    const fills = ops.filter((op) => op.op === "fill");
+    expect(fills).toHaveLength(1);
+    expect(String(fills[0].args[0])).toContain("M0.00,0.00");
+  });
+});
+
+describe("createTracedKeepOut", () => {
+  const outline = [
+    { x: 100, y: 200 },
+    { x: 160, y: 204 },
+    { x: 158, y: 250 },
+    { x: 102, y: 246 },
+  ];
+
+  it("turns a traced outline into a keep-out box carrying its own path", () => {
+    const keepOut = createTracedKeepOut(outline);
+    expect(keepOut).not.toBeNull();
+    expect(keepOut?.shapeId).toBe(TRACED_SHAPE_ID);
+    expect(keepOut?.x).toBe(100);
+    expect(keepOut?.y).toBe(200);
+    expect(keepOut?.w).toBe(60);
+    expect(keepOut?.h).toBe(50);
+    // The path is stored in the box's own coordinates, so resizing scales it.
+    expect(keepOut?.path).toContain("M0.00,0.00");
+    expect(keepOut?.path).toContain("L60.00,4.00");
+    expect(keepOut?.path?.endsWith("Z")).toBe(true);
+    expect(keepOut?.lockAspect).toBe(false);
+  });
+
+  it("refuses a trace too small to enclose anything", () => {
+    expect(createTracedKeepOut([{ x: 0, y: 0 }, { x: 10, y: 0 }])).toBeNull();
+    expect(
+      createTracedKeepOut([{ x: 0, y: 0 }, { x: 0.2, y: 0 }, { x: 0.1, y: 0.2 }])
+    ).toBeNull();
+  });
+
+  it("reports its traced path as the shape it draws", () => {
+    const keepOut = createTracedKeepOut(outline);
+    expect(keepOut).not.toBeNull();
+    const data = maskPathData(keepOut!);
+    expect(data.path).toBe(keepOut!.path);
+    expect(data.boxW).toBe(60);
+    expect(data.boxH).toBe(50);
   });
 });

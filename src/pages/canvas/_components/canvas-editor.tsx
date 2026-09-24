@@ -91,6 +91,7 @@ import {
   createDesignMask,
   fitMaskToBox,
   getMaskShape,
+  createTracedKeepOut,
   maskPathData,
   punchMaskFromCanvas,
   type DesignMask,
@@ -3598,12 +3599,41 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         if (!list[index]) return prev;
         return {
           ...prev,
-          keepOuts: list.map((shape, i) => (i === index ? changeMaskShape(shape, shapeId) : shape)),
+          // Changing the shape drops any traced outline: the library shape takes over.
+          keepOuts: list.map((shape, i) =>
+            i === index ? changeMaskShape({ ...shape, path: undefined }, shapeId) : shape
+          ),
         };
       });
     },
     [commitDesignUpdate]
   );
+  
+  /**
+   * Hand the finished trace to the keep-out list, then clear the trace so the next
+   * opening can be traced straight away. Tracing was single-shot: the tool holds
+   * one outline, so the only way to mark several openings was to trace them one at
+   * a time and lose each one on the way.
+   */
+  const useTraceAsKeepOut = useCallback(() => {
+    if (!design) {
+      toast.error(t("toast.keepOutNeedsDesign"));
+      return;
+    }
+    const keepOut = createTracedKeepOut(penTracePoints);
+    if (!keepOut) {
+      toast.error(t("toast.keepOutNeedsShape"));
+      return;
+    }
+    const nextIndex = (design.keepOuts ?? []).length;
+    commitDesignUpdate((prev) => ({ ...prev, keepOuts: [...(prev.keepOuts ?? []), keepOut] }));
+    setSelectedKeepOut(nextIndex);
+    setPenTracePoints([]);
+    setPenTraceClosed(false);
+    setPenTraceActive(false);
+    setPenTraceHover(null);
+    toast.success(t("toast.keepOutFromTrace"));
+  }, [design, penTracePoints, commitDesignUpdate, t]);
 
   /**
    * Drag or resize a shape on the canvas: the clipping mask ("mask") or one of
@@ -6002,13 +6032,24 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                       variant="secondary"
                       size="sm"
                       className="h-7 text-xs"
-                      onClick={downloadPenTraceSvg}
-                      disabled={penTracePoints.length < 2}
+onClick={downloadPenTraceSvg}
+                    disabled={penTracePoints.length < 2}
                     >
                       {t("panel.penTrace.downloadSvg")}
                     </Button>
-                  </div>
-                  <div className="space-y-2 rounded-md border border-border/60 bg-background/50 p-2">
+                    </div>
+                    <Button
+                      variant="secondary"
+                      size="sm"
+                      className="h-7 w-full text-xs"
+                      onClick={useTraceAsKeepOut}
+                      disabled={penTracePoints.length < 3}
+                      title={t("panel.keepOut.useTraceHint")}
+                    >
+                      <Ban className="mr-1 h-3 w-3" />
+                      {t("panel.keepOut.useTrace")}
+                    </Button>
+                    <div className="space-y-2 rounded-md border border-border/60 bg-background/50 p-2">
                     <div className="flex items-center justify-between gap-2">
                       <span className="text-[10px] uppercase tracking-wider text-muted-foreground">
                         {t("panel.penTrace.style")}
@@ -6811,7 +6852,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
                                   onClick={() => setSelectedKeepOut(index)}
                                   className="flex flex-1 items-center gap-1.5 text-left text-[11px]"
                                 >
-                                  <span className="font-medium">{getMaskShape(keepOut.shapeId).name}</span>
+                                  <span className="font-medium">
+                                  {keepOut.path ? t("panel.keepOut.traced") : getMaskShape(keepOut.shapeId).name}
+                                  </span>
                                   <span className="text-muted-foreground">
                                     {Math.round(displayToInches(keepOut.w, displayWidth, material.widthIn) * 100) / 100}" wide
                                   </span>

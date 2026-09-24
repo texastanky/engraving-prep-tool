@@ -48,6 +48,11 @@ export type DesignMask = {
   feather: number;
   /** Keep everything *outside* the shape instead of inside it. */
   invert: boolean;
+  /**
+   * A traced outline, in the box's own coordinates (0..w, 0..h). When set, this
+   * replaces the library shape — see createTracedKeepOut.
+   */
+  path?: string;
   /** Constrain resizing to the shape's natural aspect ratio. */
   lockAspect: boolean;
 };
@@ -173,12 +178,26 @@ export function getMaskShape(id: string): MaskShapeDef {
 }
 
 /** Corner radius is only meaningful for the rounded-rectangle shape. */
-export function maskPathData(mask: Pick<DesignMask, "shapeId" | "cornerRadius">): {
+export function maskPathData(
+  mask: Pick<DesignMask, "shapeId" | "cornerRadius"> &
+    Partial<Pick<DesignMask, "path" | "w" | "h">>
+): {
   path: string;
   boxW: number;
   boxH: number;
   fillRule: "nonzero" | "evenodd";
 } {
+  // A traced outline carries its own path, already in the box's coordinates,
+  // so there is nothing to look up: resizing and rotation scale it like any
+  // other shape.
+  if (mask.path) {
+    return {
+      path: mask.path,
+      boxW: mask.w && mask.w > 0 ? mask.w : 1,
+      boxH: mask.h && mask.h > 0 ? mask.h : 1,
+      fillRule: "nonzero",
+    };
+  }
   const shape = getMaskShape(mask.shapeId);
   const path = shape.supportsCornerRadius ? roundedRectPath(mask.cornerRadius) : shape.path;
   return { path, boxW: shape.boxW, boxH: shape.boxH, fillRule: shape.fillRule };
@@ -246,6 +265,52 @@ export function createDesignMask(
     feather: 0,
     invert: false,
     lockAspect,
+  };
+}
+
+/** Shape id carried by keep-outs built from a traced outline. */
+export const TRACED_SHAPE_ID = "traced";
+
+/**
+ * A keep-out shaped like something the user traced.
+ *
+ * The points become the outline, stored in the box's own coordinates so the
+ * pink handles resize it and the angle slider rotates it exactly like the
+ * shapes from the library. Null when the trace is too small to enclose
+ * anything — a stray click or two.
+ */
+export function createTracedKeepOut(
+  points: { x: number; y: number }[]
+): DesignMask | null {
+  if (points.length < 3) return null;
+
+  const xs = points.map((point) => point.x);
+  const ys = points.map((point) => point.y);
+  const x = Math.min(...xs);
+  const y = Math.min(...ys);
+  const w = Math.max(...xs) - x;
+  const h = Math.max(...ys) - y;
+  if (w <= 0.5 || h <= 0.5) return null;
+
+  const path =
+    points
+      .map((point, index) =>
+        `${index === 0 ? "M" : "L"}${(point.x - x).toFixed(2)},${(point.y - y).toFixed(2)}`
+      )
+      .join(" ") + " Z";
+
+  return {
+    shapeId: TRACED_SHAPE_ID,
+    x,
+    y,
+    w,
+    h,
+    rotation: 0,
+    cornerRadius: 0,
+    feather: 0,
+    invert: false,
+    lockAspect: false,
+    path,
   };
 }
 
