@@ -76,7 +76,11 @@ import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.
 import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
 import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
-import { useCustomPresets, type CustomPreset } from "../_hooks/use-custom-presets.ts";
+import {
+  useCustomPresets,
+  type CustomPreset,
+  type CustomPresetSetup,
+} from "../_hooks/use-custom-presets.ts";
 import {
   ScanLine, Crop, Wand2, Eraser, Frame, PenTool, Sparkles,
   MousePointer2, Square, Circle, Hexagon, Star, Minus, Type, Hand,
@@ -1522,11 +1526,55 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         ...pendingTracePreset.traceStyle,
       }));
     }
+    // Put the rest of the job back, scaled from the workspace it was saved in.
+    const setup = pendingTracePreset.setup;
+    if (setup) {
+      const kx = setup.space.width > 0 ? displayWidth / setup.space.width : 1;
+      const ky = setup.space.height > 0 ? displayHeight / setup.space.height : 1;
+      if (setup.clipToTrace !== undefined) setClipDesignToTrace(setup.clipToTrace);
+      const designSetup = setup.design;
+      const maskSetup = setup.mask;
+      const keepOutSetup = setup.keepOuts;
+      commitDesignUpdate((current) => {
+        const next = { ...current };
+        if (designSetup) {
+          const imgW = designSetup.width * kx;
+          const scale = current.naturalWidth > 0 ? imgW / current.naturalWidth : current.scale;
+          next.scale = scale;
+          next.scaleX = 1;
+          next.scaleY = 1;
+          next.rotation = designSetup.rotation;
+          next.x = designSetup.centerX * kx - imgW / 2;
+          next.y = designSetup.centerY * ky - (current.naturalHeight * scale) / 2;
+        }
+        if (maskSetup !== undefined) {
+          next.mask = maskSetup
+            ? {
+                ...maskSetup,
+                x: maskSetup.x * kx,
+                y: maskSetup.y * ky,
+                w: maskSetup.w * kx,
+                h: maskSetup.h * ky,
+              }
+            : null;
+        }
+        if (keepOutSetup) {
+          next.keepOuts = keepOutSetup.map((shape) => ({
+            ...shape,
+            x: shape.x * kx,
+            y: shape.y * ky,
+            w: shape.w * kx,
+            h: shape.h * ky,
+          }));
+        }
+        return next;
+      });
+    }
     setPenTraceActive(false);
     setPenTraceHover(null);
     setPendingTracePreset(null);
     toast.success(t("toast.penTracePresetLoaded", { name: pendingTracePreset.name }));
-  }, [displayHeight, displayWidth, pendingTracePreset, t]);
+  }, [commitDesignUpdate, displayHeight, displayWidth, pendingTracePreset, t]);
 
   useEffect(() => {
     if (clipDesignToTrace && (!penTraceClosed || penTracePoints.length < 3)) {
@@ -3204,6 +3252,26 @@ const handlePenTracePointMouseDown = useCallback(
       fillEnabled: penTraceStyle.fillEnabled,
       fillColor: penTraceStyle.fillColor,
     });
+
+    // Record the whole job, not just the outline: where the artwork sat, and the
+    // shapes cut into or out of it. Recalling a part then reproduces it exactly,
+    // which is what makes one part come out the same as the last one.
+    const designW = design ? design.naturalWidth * design.scale * design.scaleX : 0;
+    const designH = design ? design.naturalHeight * design.scale * design.scaleY : 0;
+    const setup: CustomPresetSetup = {
+      space: { width: displayWidth, height: displayHeight },
+      design: design
+        ? {
+            centerX: design.x + designW / 2,
+            centerY: design.y + designH / 2,
+            width: designW,
+            rotation: design.rotation,
+          }
+        : undefined,
+      mask: design?.mask ?? null,
+      keepOuts: design?.keepOuts ?? [],
+      clipToTrace: clipDesignToTrace,
+    };
 
     addCustomPreset({
       name,
@@ -6223,10 +6291,10 @@ const handlePenTracePointMouseDown = useCallback(
                   variant="ghost" size="sm"
                   className="w-full text-destructive hover:text-destructive"
                   onClick={() => {
+                    // The trace stays: it is the part outline, and the photo was only ever
+                    // what it was traced against. Reloading the photo later finds it again.
                     setPartPhoto(null);
                     setPartPhotoSrc(null);
-                    setPenTraceActive(false);
-                    clearPenTrace();
                     if (partInputRef.current) partInputRef.current.value = "";
                   }}
                 >

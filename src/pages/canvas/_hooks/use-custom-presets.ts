@@ -2,6 +2,7 @@
  * Hook for managing custom part outline presets stored in localStorage.
  */
 import { useState, useCallback } from "react";
+import type { DesignMask } from "../_components/design-mask.ts";
 
 export type CustomPresetPoint = {
   x: number;
@@ -15,6 +16,28 @@ export type CustomPresetTraceStyle = {
   fillColor?: string;
 };
 
+/**
+ * The rest of the job, so a part can be repeated exactly rather than
+ * approximately: where the artwork sat, and the shapes cut into or out of it.
+ * The numbers are in canvas pixels, with the space they were measured in, so
+ * they can be scaled onto a workspace of any size. Optional, because presets
+ * saved before this existed carry only the outline.
+ */
+export type CustomPresetSetup = {
+  space: { width: number; height: number };
+  design?: {
+    /** Centre of the artwork on the workspace. */
+    centerX: number;
+    centerY: number;
+    /** Rendered width, so a different resolution of the same art still works. */
+    width: number;
+    rotation: number;
+  };
+  mask?: DesignMask | null;
+  keepOuts?: DesignMask[];
+  clipToTrace?: boolean;
+};
+
 export type CustomPreset = {
   id: string;
   name: string;
@@ -25,6 +48,7 @@ export type CustomPreset = {
   tracePoints?: CustomPresetPoint[];
   traceClosed?: boolean;
   traceStyle?: CustomPresetTraceStyle;
+  setup?: CustomPresetSetup;
   createdAt?: string;
   source?: "pen-trace" | "outline-tracer";
 };
