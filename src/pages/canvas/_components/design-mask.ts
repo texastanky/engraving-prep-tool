@@ -370,7 +370,9 @@ function buildMaskLayer(
   target: HTMLCanvasElement,
   mask: DesignMask,
   scaleX: number,
-  scaleY: number
+  scaleY: number,
+  offsetX: number,
+  offsetY: number
 ): HTMLCanvasElement | null {
   const width = target.width;
   const height = target.height;
@@ -387,8 +389,10 @@ function buildMaskLayer(
 
   const maskW = mask.w * scaleX;
   const maskH = mask.h * scaleY;
-  const centerX = (mask.x + mask.w / 2) * scaleX;
-  const centerY = (mask.y + mask.h / 2) * scaleY;
+  // The offset is the view's pan: the shape is in canvas space, the bitmap it is
+  // punched into is in view pixels.
+  const centerX = (mask.x + mask.w / 2) * scaleX + offsetX;
+  const centerY = (mask.y + mask.h / 2) * scaleY + offsetY;
 
   shapeCtx.save();
   if (mask.invert) {
@@ -433,10 +437,12 @@ function buildMaskLayer(
     target: HTMLCanvasElement,
     mask: DesignMask | null | undefined,
     scaleX = 1,
-    scaleY = 1
+    scaleY = 1,
+    offsetX = 0,
+    offsetY = 0
   ): void {
     if (!mask) return;
-    const layer = buildMaskLayer(target, mask, scaleX, scaleY);
+    const layer = buildMaskLayer(target, mask, scaleX, scaleY, offsetX, offsetY);
     if (!layer) return;
     const ctx = target.getContext("2d");
     if (!ctx) return;
@@ -454,10 +460,12 @@ function buildMaskLayer(
     target: HTMLCanvasElement,
     mask: DesignMask | null | undefined,
     scaleX = 1,
-    scaleY = 1
+    scaleY = 1,
+    offsetX = 0,
+    offsetY = 0
   ): void {
     if (!mask) return;
-    const layer = buildMaskLayer(target, mask, scaleX, scaleY);
+    const layer = buildMaskLayer(target, mask, scaleX, scaleY, offsetX, offsetY);
     if (!layer) return;
     const ctx = target.getContext("2d");
     if (!ctx) return;

@@ -325,7 +325,7 @@ function svgToDataUrl(svg: string): string {
 const MAX_CANVAS_DPR = 2;
 
 /** Longest edge of the offscreen bitmap the design filters are rasterised into. */
-const MAX_DESIGN_RASTER_PX = 2048;
+const MAX_DESIGN_RASTER_PX = 4096;
 
 /** Zoom stops the buttons step through. */
 const ZOOM_STEPS = [0.25, 0.5, 0.75, 1, 1.5, 2, 3, 4, 6, 8];
@@ -339,26 +339,43 @@ const MAX_ZOOM = 8;
 type ViewState = { zoom: number; panX: number; panY: number };
 
 /**
- * Keep a view inside its box. Zoomed out, the canvas is centred rather than left
- * floating wherever the last drag ended; zoomed in, it stays edge-locked so the
- * material cannot be panned entirely out of sight.
+ * What a view is clamped against. The canvas space and the box are different
+ * sizes now, so panning is bounded by how big the space is *drawn* rather than
+ * by the box: at 100% the space fills the box exactly and cannot be panned.
  */
-function clampView(view: ViewState, width: number, height: number): ViewState {
-  const zoom = Math.min(Math.max(view.zoom, MIN_ZOOM), MAX_ZOOM);
-  if (zoom <= 1) {
+type ViewBounds = {
+  boxWidth: number;
+  boxHeight: number;
+  /** The canvas space in its own pixels, which the zoom scales into the box. */
+  contentWidth: number;
+  contentHeight: number;
+  minZoom: number;
+  maxZoom: number;
+};
+
+/**
+ * Keep a view inside its box. Smaller than the box, the workspace is centred
+ * rather than left wherever the last drag ended; larger, it stays edge-locked so
+ * the material cannot be panned entirely out of sight.
+ */
+function clampView(view: ViewState, bounds: ViewBounds): ViewState {
+  const { boxWidth, boxHeight, contentWidth, contentHeight, minZoom, maxZoom } = bounds;
+  const zoom = Math.min(Math.max(view.zoom, minZoom), maxZoom);
+  const drawnWidth = contentWidth * zoom;
+  const drawnHeight = contentHeight * zoom;
+  if (drawnWidth <= boxWidth && drawnHeight <= boxHeight) {
     return {
       zoom,
-      panX: (width * (1 - zoom)) / 2,
-      panY: (height * (1 - zoom)) / 2,
+      panX: (boxWidth - drawnWidth) / 2,
+      panY: (boxHeight - drawnHeight) / 2,
     };
   }
   return {
     zoom,
-    panX: Math.min(0, Math.max(width * (1 - zoom), view.panX)),
-    panY: Math.min(0, Math.max(height * (1 - zoom), view.panY)),
+    panX: Math.min(0, Math.max(boxWidth - drawnWidth, view.panX)),
+    panY: Math.min(0, Math.max(boxHeight - drawnHeight, view.panY)),
   };
 }
-
 /**
  * Device pixel ratio for the canvas bitmaps.
  *
@@ -1132,7 +1149,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [view]);
   const [panMode, setPanMode] = useState(false);
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
-  const [manualDisplaySize, setManualDisplaySize] = useState<{ w: number; h: number } | null>(null);
+  const [manualBoxSize, setManualBoxSize] = useState<{ w: number; h: number } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
   // Design real-world size inputs (in current unit)
@@ -1340,7 +1357,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // When resizeMode turns off, reset manual display size
   useEffect(() => {
     if (!resizeMode) {
-      setManualDisplaySize(null);
+      setManualBoxSize(null);
     }
   }, [resizeMode]);
 
@@ -1425,15 +1442,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     Math.min(containerWidth, viewportWidth - canvasLeft) - CANVAS_MARGIN,
     MIN_CANVAS_SIZE + rulerThickness,
   );
-  // Caps restored to their original values.
-  //
-  // The canvas is the coordinate space for traced templates, masks, design
-  // positions, and the Fill maths (which scales art to `displayWidth /
-  // naturalWidth`). Removing these caps so the workspace could fill the window
-  // silently changed the scale all of that was built against — a template traced
-  // against a 520 px canvas no longer landed on the part. A genuinely larger
-  // workspace has to rescale that stored geometry with it; it is not something
-  // to get as a side effect of deleting two lines.
+  // The canvas *space* keeps its long-standing size. Every stored coordinate —
+  // traced points, masks, keep-outs, the design's position, the export maths — is
+  // measured in it, so resizing it would move work that is already placed. The
+  // caps stay for exactly that reason.
   const maxW = Math.min(
     Math.max(availableWorkspaceWidth - rulerThickness, MIN_CANVAS_SIZE),
     820,
@@ -1443,33 +1455,58 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     isCompactLayout ? 420 : 520,
   );
   const materialRatio = material.widthIn / material.heightIn;
-
-  let displayWidth: number;
-  let displayHeight: number;
-
-  if (resizeMode && manualDisplaySize) {
-    const manualRatio =
-      manualDisplaySize.h > 0 ? manualDisplaySize.w / manualDisplaySize.h : materialRatio;
-    displayWidth = Math.min(Math.max(manualDisplaySize.w, MIN_CANVAS_SIZE), maxW);
-    displayHeight = Math.min(Math.max(manualDisplaySize.h, MIN_CANVAS_SIZE), maxH);
-    if (manualDisplaySize.w > maxW) {
-      displayHeight = Math.round(displayWidth / manualRatio);
-    }
-    if (displayHeight > maxH) {
-      displayHeight = maxH;
-      displayWidth = Math.min(maxW, Math.round(displayHeight * manualRatio));
-    }
+  
+  let displayWidth = maxW;
+  let displayHeight = Math.round(displayWidth / materialRatio);
+  if (displayHeight > maxH) {
+    displayHeight = maxH;
+    displayWidth = Math.round(displayHeight * materialRatio);
+  }
+  
+  // The box the workspace is drawn into: the room actually available, or the size
+  // dragged out in resize mode. The view scales the canvas space into it, so a
+  // bigger box shows a bigger workspace without touching a single stored
+  // coordinate — which is what makes this safe, and why the resize handles now
+  // size the box rather than the space.
+  const maxBoxWidth = Math.max(availableWorkspaceWidth - rulerThickness, MIN_CANVAS_SIZE);
+  const maxBoxHeight = Math.max(
+    Math.round(viewportHeight * (isCompactLayout ? 0.56 : 0.74)) - rulerThickness - 24,
+    MIN_CANVAS_SIZE,
+  );
+  
+  let boxWidth: number;
+  let boxHeight: number;
+  if (resizeMode && manualBoxSize) {
+    boxWidth = Math.min(Math.max(manualBoxSize.w, MIN_CANVAS_SIZE), maxBoxWidth);
+    boxHeight = Math.min(Math.max(manualBoxSize.h, MIN_CANVAS_SIZE), maxBoxHeight);
   } else {
-    displayWidth = maxW;
-    displayHeight = Math.round(displayWidth / materialRatio);
-    if (displayHeight > maxH) {
-      displayHeight = maxH;
-      displayWidth = Math.round(displayHeight * materialRatio);
+    boxWidth = maxBoxWidth;
+    boxHeight = Math.round(boxWidth / materialRatio);
+    if (boxHeight > maxBoxHeight) {
+      boxHeight = maxBoxHeight;
+      boxWidth = Math.round(boxHeight * materialRatio);
     }
   }
+  
+  /** The zoom at which the canvas space exactly fills the box — what 100% means. */
+  const fitZoom = Math.min(boxWidth / displayWidth, boxHeight / displayHeight);
+  
+  // Pixels-per-inch on screen at the current zoom.
+  const screenPpi = (displayWidth * view.zoom) / material.widthIn;
 
-  // Pixels-per-inch on screen for this canvas
-  const screenPpi = displayWidth / material.widthIn;
+  /** Everything a view is clamped against, gathered in one place. */
+  const viewBounds = useCallback(
+    (minZoom: number, maxZoom: number): ViewBounds => ({
+      boxWidth,
+      boxHeight,
+      contentWidth: displayWidth,
+      contentHeight: displayHeight,
+      minZoom,
+      maxZoom,
+    }),
+    [boxWidth, boxHeight, displayWidth, displayHeight]
+  );
+
 
   useEffect(() => {
     if (!pendingTracePreset) return;
@@ -1752,11 +1789,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       let g: CanvasRenderingContext2D = ctx;
       if (design.mask || keepOuts.length > 0) {
         maskLayer = document.createElement("canvas");
-        maskLayer.width = Math.round(displayWidth * dpr);
-        maskLayer.height = Math.round(displayHeight * dpr);
+        // The layer is a copy of the workspace bitmap, view and all, so the design
+        // lands in it at exactly the scale it is composited back at.
+        maskLayer.width = canvas.width;
+        maskLayer.height = canvas.height;
         maskLayerCtx = maskLayer.getContext("2d");
         if (maskLayerCtx) {
-          maskLayerCtx.setTransform(dpr, 0, 0, dpr, 0, 0);
+          maskLayerCtx.setTransform(
+            dpr * view.zoom, 0, 0, dpr * view.zoom, dpr * view.panX, dpr * view.panY
+          );
           g = maskLayerCtx;
         } else {
           maskLayer = null;
@@ -1772,9 +1813,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       // at display size. A design no larger than the canvas gets the full dpr;
       // a design scaled up past the canvas stops at what the screen can show,
       // so dragging one around cannot tank the frame rate.
+      // Rasterise at what the screen can actually show: device pixels times the
+      // view scale, so a workspace filling a big window stays crisp.
       const rasterCeiling = Math.min(
         MAX_DESIGN_RASTER_PX,
-        Math.round(Math.max(displayWidth, displayHeight) * dpr)
+        Math.round(Math.max(displayWidth, displayHeight) * dpr * Math.max(view.zoom, 1))
       );
       const rasScale = Math.min(dpr, rasterCeiling / Math.max(imgW, imgH, 1));
       const filtered = applyFiltersToCanvas(
@@ -1800,17 +1843,20 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       g.restore();
 
       if (maskLayer) {
-        // The layer is device-sized, so the shape geometry is scaled to match it
-        // before being punched in, then composited back at display size. The
-        // shaping itself runs at 1:1 so the clipped edge stays sharp.
-        maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
-        if (design.mask) applyMaskToCanvas(maskLayer, design.mask, dpr, dpr);
-        // Keep-outs cut the artwork away: nothing lands where the part has an
-        // opening the laser must not mark.
-        for (const keepOut of keepOuts) {
-          punchMaskFromCanvas(maskLayer, keepOut, dpr, dpr);
+maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
+        // The shapes live in canvas space, so they scale into the bitmap exactly as
+        // the artwork did: by the view, plus its pan offset. The clip then runs at
+        // 1:1 with the workspace bitmap, so the edge stays sharp.
+        const maskScale = dpr * view.zoom;
+        const maskOffsetX = dpr * view.panX;
+        const maskOffsetY = dpr * view.panY;
+        if (design.mask) {
+          applyMaskToCanvas(maskLayer, design.mask, maskScale, maskScale, maskOffsetX, maskOffsetY);
         }
-        ctx.drawImage(maskLayer, 0, 0, displayWidth, displayHeight);
+        for (const keepOut of keepOuts) {
+          punchMaskFromCanvas(maskLayer, keepOut, maskScale, maskScale, maskOffsetX, maskOffsetY);
+        }
+        ctx.drawImage(maskLayer, 0, 0);
       }
       
       // Outlines are screen furniture, drawn straight onto the workspace canvas,
@@ -1823,18 +1869,25 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     // Vector layer sits above the design so cut lines stay readable.
     paintVectorObjects(ctx, 1, 1);
 
-  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects, dpr, view]);
+  }, [partPhoto, partRotation, design, displayWidth, displayHeight, material, unit, clipDesignToTrace, penTraceClosed, penTracePoints, paintVectorObjects, dpr, view, boxWidth, boxHeight]);
 
   useEffect(() => {
     const canvas = canvasRef.current;
     if (!canvas) return;
     // Backing store in device pixels — this overrides the CSS-sized width and
     // height the element is rendered with. Layout box stays in CSS pixels.
-    canvas.width = Math.round(displayWidth * dpr);
-    canvas.height = Math.round(displayHeight * dpr);
+    // Only touched when the size really changes: assigning these clears the bitmap,
+    // so doing it on every draw — a pan, a zoom, a drag — would reallocate and
+    // blank the workspace frame by frame.
+    const width = Math.round(boxWidth * dpr);
+    const height = Math.round(boxHeight * dpr);
+    if (canvas.width !== width || canvas.height !== height) {
+      canvas.width = width;
+      canvas.height = height;
+    }
     draw();
     drawExternalRulers();
-  }, [displayWidth, displayHeight, dpr, draw]);
+    }, [boxWidth, boxHeight, dpr, draw]);
 
   useEffect(() => {
     draw();
@@ -1846,16 +1899,18 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     const topCanvas = topRulerRef.current;
     const leftCanvas = leftRulerRef.current;
     if (!topCanvas || !leftCanvas) return;
-
-    const w = displayWidth;
-    const h = displayHeight;
+  
+    // The strip is view pixels; the graduations are the canvas space mapped
+    // through the view, so they stay honest however big the box is.
+    const w = boxWidth;
+    const h = boxHeight;
     const matW = material.widthIn;
     const matH = material.heightIn;
     const u = unit;
     const rT = RULER_THICKNESS;
 
-    const ppiX = w / matW;
-    const ppiY = h / matH;
+    const ppiX = displayWidth / matW;
+    const ppiY = displayHeight / matH;
     // Graduations live in view pixels: the ruler is a window frame, so the ticks
     // spread and refine with the zoom instead of being stretched with it.
     const viewPx = (contentPx: number, pan: number) => contentPx * view.zoom + pan;
@@ -1929,7 +1984,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         }
       }
     }
-  }, [displayWidth, displayHeight, material, unit, dpr, view]);
+  }, [displayWidth, displayHeight, boxWidth, boxHeight, material, unit, dpr, view]);
 
 
 
@@ -2202,7 +2257,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const zoomAtViewPoint = useCallback(
     (zoom: number, viewX: number, viewY: number) => {
       setView((current) => {
-        const next = Math.min(Math.max(zoom, MIN_ZOOM), MAX_ZOOM);
+        const minZoom = fitZoom * MIN_ZOOM;
+        const maxZoom = fitZoom * MAX_ZOOM;
+        const next = Math.min(Math.max(zoom, minZoom), maxZoom);
         const k = next / current.zoom;
         return clampView(
           {
@@ -2210,40 +2267,57 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             panX: viewX - (viewX - current.panX) * k,
             panY: viewY - (viewY - current.panY) * k,
           },
-          displayWidth,
-          displayHeight
-        );
+          viewBounds(minZoom, maxZoom)
+          );
       });
     },
-    [displayWidth, displayHeight]
+    [boxWidth, boxHeight, fitZoom]
   );
 
   const stepZoom = useCallback(
     (direction: 1 | -1) => {
       setView((current) => {
-        const next =
+        // Steps are fractions of the fit, so they mean the same on any screen.
+        const relative = current.zoom / fitZoom;
+        const nextRelative =
           direction > 0
-            ? ZOOM_STEPS.find((z) => z > current.zoom + 1e-4) ?? MAX_ZOOM
-            : [...ZOOM_STEPS].reverse().find((z) => z < current.zoom - 1e-4) ?? MIN_ZOOM;
+            ? ZOOM_STEPS.find((step) => step > relative + 1e-3) ?? MAX_ZOOM
+            : [...ZOOM_STEPS].reverse().find((step) => step < relative - 1e-3) ?? MIN_ZOOM;
+        const next = nextRelative * fitZoom;
         const k = next / current.zoom;
-        const cx = displayWidth / 2;
-        const cy = displayHeight / 2;
+        const cx = boxWidth / 2;
+        const cy = boxHeight / 2;
         return clampView(
           { zoom: next, panX: cx - (cx - current.panX) * k, panY: cy - (cy - current.panY) * k },
-          displayWidth,
-          displayHeight
-        );
+          viewBounds(fitZoom * MIN_ZOOM, fitZoom * MAX_ZOOM)
+          );
       });
     },
-    [displayWidth, displayHeight]
+    [boxWidth, boxHeight, fitZoom]
   );
 
-  const resetView = useCallback(() => setView({ zoom: 1, panX: 0, panY: 0 }), []);
+  /** Back to 100%: the canvas space filling the box. */
+  const resetView = useCallback(
+    () => setView({ zoom: fitZoom, panX: 0, panY: 0 }),
+    [fitZoom]
+  );
 
-  // A resized workspace box can leave an old pan pointing outside it.
+  // Follow the box. At 100% the canvas space keeps filling it, so a bigger window
+  // means a bigger workspace; a zoom the user chose is left where they put it.
+  // The first run also sets the starting view, which is why there is no initial
+  // zoom in the state above.
+  const previousFitRef = useRef<number | null>(null);
   useEffect(() => {
-    setView((current) => clampView(current, displayWidth, displayHeight));
-  }, [displayWidth, displayHeight]);
+    const previous = previousFitRef.current;
+    previousFitRef.current = fitZoom;
+    setView((current) => {
+      const wasAtFit = previous === null || Math.abs(current.zoom - previous) < 1e-3;
+      return clampView(
+        { zoom: wasAtFit ? fitZoom : current.zoom, panX: current.panX, panY: current.panY },
+        viewBounds(fitZoom * MIN_ZOOM, fitZoom * MAX_ZOOM)
+        );
+    });
+  }, [boxWidth, boxHeight, fitZoom]);
 
   // Ctrl/⌘ + wheel zooms at the pointer. Registered natively because React's
   // wheel listener is passive, and a passive one cannot stop Electron's own
@@ -2444,9 +2518,8 @@ const handlePenTracePointMouseDown = useCallback(
               panX: pan.panX + (e.clientX - pan.startX),
               panY: pan.panY + (e.clientY - pan.startY),
             },
-            displayWidth,
-            displayHeight
-          )
+            viewBounds(fitZoom * MIN_ZOOM, fitZoom * MAX_ZOOM)
+            )
         );
         return;
       }
@@ -3417,7 +3490,7 @@ const handlePenTracePointMouseDown = useCallback(
           }
         }
 
-        setManualDisplaySize({
+        setManualBoxSize({
           w: Math.max(newW, 80),
           h: Math.max(newH, 80),
         });
@@ -4765,7 +4838,7 @@ const handlePenTracePointMouseDown = useCallback(
         items: [
           { kind: "item", label: t("editor.zoom.in"), icon: ZoomIn, onSelect: () => stepZoom(1) },
           { kind: "item", label: t("editor.zoom.out"), icon: ZoomOut, onSelect: () => stepZoom(-1) },
-          { kind: "item", label: t("editor.zoom.reset"), icon: RefreshCw, onSelect: resetView, disabled: view.zoom === 1 },
+          { kind: "item", label: t("editor.zoom.reset"), icon: RefreshCw, onSelect: resetView, disabled: Math.abs(view.zoom - fitZoom) < 1e-3 },
           { kind: "item", label: t("editor.zoom.pan"), icon: Hand, onSelect: () => setPanMode((value) => !value), checked: panMode },
           { kind: "separator" },
           { kind: "item", label: t("editor.tooltip.ruler"), icon: Ruler, onSelect: () => setShowRuler((value) => !value), checked: showRuler },
@@ -5103,7 +5176,7 @@ const handlePenTracePointMouseDown = useCallback(
             {/* Ruler + workspace layout */}
             <div
               className="flex max-w-full flex-col"
-              style={{ width: displayWidth + rulerThickness }}
+              style={{ width: boxWidth + rulerThickness }}
             >
               {/* Top ruler (above canvas) */}
               {showRuler && (
@@ -5111,11 +5184,11 @@ const handlePenTracePointMouseDown = useCallback(
                   {/* Corner spacer */}
                   <div style={{ width: 20, height: 20, flexShrink: 0 }} className="bg-secondary/30 border-b border-r border-border/40" />
                   <canvas
-                    ref={topRulerRef}
-                    width={displayWidth}
-                    height={20}
-                    className="block"
-                    style={{ width: displayWidth, height: 20 }}
+                  ref={topRulerRef}
+                  width={boxWidth}
+                  height={20}
+                  className="block"
+                  style={{ width: boxWidth, height: 20 }}
                   />
                 </div>
               )}
@@ -5123,11 +5196,11 @@ const handlePenTracePointMouseDown = useCallback(
               <div className="flex">
                 {showRuler && (
                   <canvas
-                    ref={leftRulerRef}
-                    width={20}
-                    height={displayHeight}
-                    className="block"
-                    style={{ width: 20, height: displayHeight, flexShrink: 0 }}
+                  ref={leftRulerRef}
+                  width={20}
+                  height={boxHeight}
+                  className="block"
+                  style={{ width: 20, height: boxHeight, flexShrink: 0 }}
                   />
                 )}
                 <div
@@ -5135,23 +5208,23 @@ const handlePenTracePointMouseDown = useCallback(
                     isDropHover ? "border-primary" : "border-border"
                   }`}
                   style={{
-                    width: displayWidth,
-                    height: displayHeight,
-                    touchAction: design || penTraceActive ? "none" : "pan-y",
+                  width: boxWidth,
+                  height: boxHeight,
+                  touchAction: design || penTraceActive ? "none" : "pan-y",
                   }}
                   onDragOver={(e) => { e.preventDefault(); setIsDropHover(true); }}
                   onDragLeave={() => setIsDropHover(false)}
                   onDrop={handleDrop}
                 >
               <canvas
-                ref={canvasRef}
-                width={displayWidth}
-                height={displayHeight}
+              ref={canvasRef}
+              width={boxWidth}
+              height={boxHeight}
                 className="block"
                 style={{
-                  width: displayWidth,
-                  height: displayHeight,
-                  cursor: panMode
+                width: boxWidth,
+                height: boxHeight,
+                cursor: panMode
                     ? "grab"
                     : penTraceActive
                       ? "crosshair"
@@ -5892,7 +5965,7 @@ const handlePenTracePointMouseDown = useCallback(
                   title={t("editor.zoom.reset")}
                   className="w-11 text-[10px] tabular-nums text-muted-foreground hover:text-foreground"
                 >
-                  {Math.round(view.zoom * 100)}%
+                  {Math.round((view.zoom / fitZoom) * 100)}%
                 </button>
                 <Button
                   size="icon"
