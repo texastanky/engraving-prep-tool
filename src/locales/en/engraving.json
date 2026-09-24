@@ -257,6 +257,8 @@
   "panel.bed.none": "Just the traced part so far.",
   "panel.bed.part": "Part {{count}}",
   "panel.bed.remove": "Remove this part",
+  "panel.bed.drag": "Drag this part",
+  "panel.bed.dragHint": "Drag to move this piece on the bed. The X and Y in the panel follow.",
   "panel.material": "Material Size",
   "panel.material.width": "Width",
   "panel.material.height": "Height",

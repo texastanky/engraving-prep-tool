@@ -475,6 +475,35 @@ function offsetShape(shape: DesignMask, dx: number, dy: number): DesignMask {
   return dx === 0 && dy === 0 ? shape : { ...shape, x: shape.x + dx, y: shape.y + dy };
 }
 
+/**
+ * Dashed outline of a traced part, drawn beside the artwork on the workspace so a
+ * placed part can be seen and dragged into the right spot. Never exported: the
+ * export builds its own canvas and does not call this.
+ */
+function strokeOutlinePoints(
+  ctx: CanvasRenderingContext2D,
+  points: Pt[],
+  colour: string,
+  lineWidth: number,
+  dx = 0,
+  dy = 0
+) {
+  if (points.length < 2) return;
+  ctx.save();
+  ctx.translate(dx, dy);
+  ctx.beginPath();
+  ctx.moveTo(points[0].x, points[0].y);
+  for (let i = 1; i < points.length; i++) {
+    ctx.lineTo(points[i].x, points[i].y);
+  }
+  ctx.closePath();
+  ctx.lineWidth = lineWidth;
+  ctx.setLineDash([6 * lineWidth, 4 * lineWidth]);
+  ctx.strokeStyle = colour;
+  ctx.stroke();
+  ctx.restore();
+}
+
 function drawTraceOnCanvas(
   ctx: CanvasRenderingContext2D,
   points: Pt[],
@@ -2002,6 +2031,17 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       // so they never reach an export.
       for (const keepOut of keepOuts) {
         strokeShapeOutline(ctx, keepOut, "rgba(244,63,94,0.95)");
+      }
+      // Each placed part, so it can be seen and dragged onto its piece.
+      for (const part of copies) {
+        strokeOutlinePoints(
+          ctx,
+          part.points ?? penTracePoints,
+          "rgba(56,189,248,0.95)",
+          1.5 / view.zoom,
+          part.dx,
+          part.dy
+        );
       }
     }
 
@@ -3928,104 +3968,145 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
         );
         
           // --- Parts on the bed ---
-          /** Copies of the traced part placed elsewhere on the bed. */
-          const partCopies = design?.partCopies ?? [];
-        
-          /**
-           * Place another part. Copies are offsets from the traced outline and share its
-           * artwork placement and keep-outs, so a run of parts engraves identically.
-           */
-          const repeatPart = useCallback(() => {
-            if (!design) {
-              toast.error(t("toast.keepOutNeedsDesign"));
-              return;
-            }
-            if (penTracePoints.length < 3) {
-              toast.error(t("toast.repeatNeedsOutline"));
-              return;
-            }
-            const xs = penTracePoints.map((point) => point.x);
-            const outlineWidth = Math.max(...xs) - Math.min(...xs);
-            const gap = Math.round(outlineWidth * 0.1);
-            const index = (design.partCopies ?? []).length + 1;
-            commitDesignUpdate((current) => ({
-              ...current,
-              partCopies: [
-                ...(current.partCopies ?? []),
-                {
-                  id: `part-${Date.now().toString(36)}-${index}`,
-                  dx: Math.round((outlineWidth + gap) * index),
-                  dy: 0,
-                },
-              ],
-            }));
-            toast.success(t("toast.partRepeated"));
-          }, [design, penTracePoints, commitDesignUpdate, t]);
-        
-          /**
-           * Place a saved trace on the bed as another part. Each part keeps its own
-           * outline while the design stays where it is, so the pieces between them share
-           * one continuous artwork.
-           */
-          const placeSavedPartOnBed = useCallback(
-            (preset: CustomPreset) => {
-              if (!design) {
-                toast.error(t("toast.keepOutNeedsDesign"));
-                return;
-              }
-              if (!hasSavedTracePoints(preset)) {
-                toast.error(t("toast.repeatNeedsOutline"));
-                return;
-              }
-              const points = scaleTracePoints(preset.tracePoints, displayWidth, displayHeight);
-              const xs = points.map((point) => point.x);
-              const ys = points.map((point) => point.y);
-              const width = Math.max(...xs) - Math.min(...xs);
-              const index = (design.partCopies ?? []).length + 1;
-              commitDesignUpdate((current) => ({
-                ...current,
-                partCopies: [
-                  ...(current.partCopies ?? []),
-                  {
-                    id: `part-${Date.now().toString(36)}-${index}`,
-                    name: preset.name,
-                    dx: Math.round((width + width * 0.1) * index),
-                    dy: 0,
-                    points,
-                    closed: preset.traceClosed ?? true,
-                  },
-                ],
-              }));
-              toast.success(t("toast.partPlaced", { name: preset.name }));
-            },
-            [design, displayWidth, displayHeight, commitDesignUpdate, t]
-          );
-        
-          const removePartCopy = useCallback(
-            (id: string) => {
-              commitDesignUpdate((prev) => ({
-                ...prev,
-                partCopies: (prev.partCopies ?? []).filter((copy) => copy.id !== id),
-              }));
-            },
-            [commitDesignUpdate]
-          );
-        
-          /** Move a placed part. Offsets are in canvas pixels; the panel shows inches. */
-          const setPartCopyOffset = useCallback(
-            (id: string, offset: { dx: number; dy: number }, record = true) => {
-              const apply = (prev: ImageState): ImageState => ({
-                ...prev,
-                partCopies: (prev.partCopies ?? []).map((copy) =>
-                  copy.id === id ? { ...copy, ...offset } : copy
-                ),
-              });
-              if (record) commitDesignUpdate(apply);
-              else updateDesignContinuously(apply);
-            },
-            [commitDesignUpdate, updateDesignContinuously]
-          );
-        
+  /** Copies of the traced part placed elsewhere on the bed. */
+  const partCopies = design?.partCopies ?? [];
+
+  /**
+   * Place another copy of the traced outline. Parts share one design, so this
+   * adds a window onto the artwork rather than another copy of it.
+   */
+  const repeatPart = useCallback(() => {
+    if (!design) {
+      toast.error(t("toast.keepOutNeedsDesign"));
+      return;
+    }
+    if (penTracePoints.length < 3) {
+      toast.error(t("toast.repeatNeedsOutline"));
+      return;
+    }
+    const xs = penTracePoints.map((point) => point.x);
+    const outlineWidth = Math.max(...xs) - Math.min(...xs);
+    const gap = Math.round(outlineWidth * 0.1);
+    const index = (design.partCopies ?? []).length + 1;
+    commitDesignUpdate((current) => ({
+      ...current,
+      partCopies: [
+        ...(current.partCopies ?? []),
+        {
+          id: `part-${Date.now().toString(36)}-${index}`,
+          dx: Math.round((outlineWidth + gap) * index),
+          dy: 0,
+        },
+      ],
+    }));
+    toast.success(t("toast.partRepeated"));
+  }, [design, penTracePoints, commitDesignUpdate, t]);
+
+  /**
+   * Place a saved trace on the bed as another part. Each part keeps its own
+   * outline while the design stays where it is, so the pieces between them share
+   * one continuous artwork.
+   */
+  const placeSavedPartOnBed = useCallback(
+    (preset: CustomPreset) => {
+      if (!design) {
+        toast.error(t("toast.keepOutNeedsDesign"));
+        return;
+      }
+      if (!hasSavedTracePoints(preset)) {
+        toast.error(t("toast.repeatNeedsOutline"));
+        return;
+      }
+      const points = scaleTracePoints(preset.tracePoints, displayWidth, displayHeight);
+      const xs = points.map((point) => point.x);
+      const width = Math.max(...xs) - Math.min(...xs);
+      const index = (design.partCopies ?? []).length + 1;
+      commitDesignUpdate((current) => ({
+        ...current,
+        partCopies: [
+          ...(current.partCopies ?? []),
+          {
+            id: `part-${Date.now().toString(36)}-${index}`,
+            name: preset.name,
+            dx: Math.round((width + width * 0.1) * index),
+            dy: 0,
+            points,
+            closed: preset.traceClosed ?? true,
+          },
+        ],
+      }));
+      toast.success(t("toast.partPlaced", { name: preset.name }));
+    },
+    [design, displayWidth, displayHeight, commitDesignUpdate, t]
+  );
+
+  const removePartCopy = useCallback(
+    (id: string) => {
+      commitDesignUpdate((prev) => ({
+        ...prev,
+        partCopies: (prev.partCopies ?? []).filter((copy) => copy.id !== id),
+      }));
+    },
+    [commitDesignUpdate]
+  );
+
+  /** Move a placed part. Offsets are in canvas pixels; the panel shows inches. */
+  const setPartCopyOffset = useCallback(
+    (id: string, offset: { dx: number; dy: number }, record = true) => {
+      const apply = (prev: ImageState): ImageState => ({
+        ...prev,
+        partCopies: (prev.partCopies ?? []).map((copy) =>
+          copy.id === id ? { ...copy, ...offset } : copy
+        ),
+      });
+      if (record) commitDesignUpdate(apply);
+      else updateDesignContinuously(apply);
+    },
+    [commitDesignUpdate, updateDesignContinuously]
+  );
+
+  /**
+   * Drag a placed part around the bed. Offsets are in canvas pixels, so the drag
+   * reads the view zoom; the whole gesture is one undo step.
+   */
+  const handlePartPointerDown = useCallback(
+    (e: React.PointerEvent, id: string) => {
+      const start = (design?.partCopies ?? []).find((copy) => copy.id === id);
+      if (!start) return;
+      e.stopPropagation();
+      e.preventDefault();
+      e.currentTarget.setPointerCapture?.(e.pointerId);
+
+      const startX = e.clientX;
+      const startY = e.clientY;
+      const originDx = start.dx;
+      const originDy = start.dy;
+
+      const onMove = (ev: PointerEvent) => {
+        const zoom = viewRef.current.zoom;
+        setPartCopyOffset(
+          id,
+          {
+            dx: originDx + (ev.clientX - startX) / zoom,
+            dy: originDy + (ev.clientY - startY) / zoom,
+          },
+          false
+        );
+      };
+
+      const onUp = () => {
+        commitSnapshot();
+        window.removeEventListener("pointermove", onMove);
+        window.removeEventListener("pointerup", onUp);
+        window.removeEventListener("pointercancel", onUp);
+      };
+
+      window.addEventListener("pointermove", onMove);
+      window.addEventListener("pointerup", onUp);
+      window.addEventListener("pointercancel", onUp);
+    },
+    [design?.partCopies, setPartCopyOffset, commitSnapshot]
+  );
         /** Drop every keep-out at once. */
         const clearKeepOuts = useCallback(() => {
             commitDesignUpdate((prev) => ({ ...prev, keepOuts: [] }));
@@ -5771,6 +5852,34 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                   </>
                 );
               })()}
+
+              {/* Placed parts — drag a tag to move that piece on the bed */}
+              {design && !warpMode && !penTraceActive && (design.partCopies ?? []).map((part, index) => {
+                const points = part.points ?? penTracePoints;
+                if (points.length < 3) return null;
+                const xs = points.map((point) => point.x);
+                const ys = points.map((point) => point.y);
+                const anchor = toView(Math.min(...xs) + part.dx, Math.min(...ys) + part.dy);
+                return (
+                  <div
+                    key={part.id}
+                    data-engraving-bed-part={part.id}
+                    aria-label={t("panel.bed.drag")}
+                    className="absolute z-[76] flex items-center gap-1 rounded-full bg-sky-500 px-2 py-0.5 text-[10px] font-semibold text-white shadow-[0_0_0_2px_rgba(15,23,42,0.9),0_2px_8px_rgba(0,0,0,0.5)] whitespace-nowrap"
+                    style={{
+                      left: anchor.x,
+                      top: anchor.y - 20,
+                      cursor: "move",
+                      touchAction: "none",
+                    }}
+                    title={t("panel.bed.dragHint")}
+                    onPointerDown={(e) => handlePartPointerDown(e, part.id)}
+                  >
+                    <Move className="h-3 w-3" />
+                    {part.name ?? t("panel.bed.part", { count: index + 2 })}
+                  </div>
+                );
+              })}
 
               {/* Selected keep-out — where the laser must not mark */}
               {design && selectedKeepOut !== null && design.keepOuts?.[selectedKeepOut] && !warpMode && !penTraceActive && (() => {

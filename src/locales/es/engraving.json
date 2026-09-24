@@ -256,6 +256,8 @@
   "panel.bed.none": "Solo la pieza trazada por ahora.",
   "panel.bed.part": "Pieza {{count}}",
   "panel.bed.remove": "Quitar esta pieza",
+  "panel.bed.drag": "Arrastrar esta pieza",
+  "panel.bed.dragHint": "Arrastra para mover esta pieza en la cama. La X y la Y del panel se actualizan.",
   "panel.material": "Tamaño del Material",
   "panel.material.width": "Ancho",
   "panel.material.height": "Alto",
