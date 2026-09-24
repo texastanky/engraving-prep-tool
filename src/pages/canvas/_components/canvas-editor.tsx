@@ -443,6 +443,38 @@ function strokeShapeOutline(
   ctx.restore();
 }
 
+/**
+ * Clip the context to a mask shape, in canvas coordinates. Used when the part is
+ * repeated: the shape has to bound each copy's artwork rather than composite
+ * over the finished layer, which can only ever hold one part's worth.
+ */
+function clipToShapePath(
+  ctx: CanvasRenderingContext2D,
+  shape: DesignMask,
+  scaleX = 1,
+  scaleY = 1
+) {
+  const { path, boxW, boxH, fillRule } = maskPathData(shape);
+  if (shape.w <= 0 || shape.h <= 0 || boxW <= 0 || boxH <= 0) return;
+  const ambient = ctx.getTransform();
+  ctx.translate((shape.x + shape.w / 2) * scaleX, (shape.y + shape.h / 2) * scaleY);
+  ctx.rotate((shape.rotation * Math.PI) / 180);
+  ctx.translate((-shape.w * scaleX) / 2, (-shape.h * scaleY) / 2);
+  ctx.scale((shape.w * scaleX) / boxW, (shape.h * scaleY) / boxH);
+  try {
+    ctx.clip(new Path2D(path), fillRule);
+  } catch {
+    // Path2D unavailable (non-browser env) — leave the artwork unclipped.
+  }
+  // The clip is recorded in device space, so putting the transform back keeps it.
+  ctx.setTransform(ambient);
+}
+
+/** Offset a shape on the bed — a keep-out or mask belonging to another part. */
+function offsetShape(shape: DesignMask, dx: number, dy: number): DesignMask {
+  return dx === 0 && dy === 0 ? shape : { ...shape, x: shape.x + dx, y: shape.y + dy };
+}
+
 function drawTraceOnCanvas(
   ctx: CanvasRenderingContext2D,
   points: Pt[],
@@ -548,6 +580,12 @@ type ImageState = {
    * existed do not carry the field.
    */
   keepOuts?: DesignMask[];
+  /**
+   * Copies of the part placed elsewhere on the bed, as offsets from the traced
+   * outline. A copy is the same outline with the same artwork placement and the
+   * same keep-outs, so a run of parts comes out identical.
+   */
+  partCopies?: { id: string; dx: number; dy: number }[];
   };
 
 type MaterialSize = {
@@ -1567,6 +1605,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
             h: shape.h * ky,
           }));
         }
+        if (setup.partCopies) {
+          next.partCopies = setup.partCopies.map((copy) => ({
+            ...copy,
+            dx: copy.dx * kx,
+            dy: copy.dy * ky,
+          }));
+        }
         return next;
       });
     }
@@ -1829,9 +1874,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       const cy = design.y + imgH / 2;
       const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
 
+      // Every part on the bed draws the same artwork: the traced part itself, plus
+      // one drawing at each copy's offset.
+      //
       // A shape mask clips in canvas space, so the design is drawn into its own
       // layer first and clipped before compositing (PowerClip behaviour).
       const keepOuts = design.keepOuts ?? [];
+      const copies = design.partCopies ?? [];
+      const placements = [{ dx: 0, dy: 0 }, ...copies.map((copy) => ({ dx: copy.dx, dy: copy.dy }))];
       let maskLayer: HTMLCanvasElement | null = null;
       let maskLayerCtx: CanvasRenderingContext2D | null = null;
       let g: CanvasRenderingContext2D = ctx;
@@ -1852,17 +1902,8 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         }
       }
 
-      g.save();
-      if (shouldClipDesign) {
-        clipToTracePath(g, penTracePoints);
-      }
-
-      // Rasterise the filtered design at device resolution, then draw it back
-      // at display size. A design no larger than the canvas gets the full dpr;
-      // a design scaled up past the canvas stops at what the screen can show,
-      // so dragging one around cannot tank the frame rate.
-      // Rasterise at what the screen can actually show: device pixels times the
-      // view scale, so a workspace filling a big window stays crisp.
+      // Rasterise the filtered artwork once per frame rather than once per part: at
+      // device resolution, capped at what the screen can actually show.
       const rasterCeiling = Math.min(
         MAX_DESIGN_RASTER_PX,
         Math.round(Math.max(displayWidth, displayHeight) * dpr * Math.max(view.zoom, 1))
@@ -1875,34 +1916,59 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
         Math.max(1, Math.round(imgH * rasScale)),
         eraserMaskRef.current,
       );
-
-      if (design.warpMesh) {
-        drawWarpedImage(g, filtered, design.warpMesh, design.opacity);
-      } else {
+      
+      for (const placement of placements) {
         g.save();
-        g.globalAlpha = design.opacity;
-        g.translate(cx, cy);
-        g.rotate((design.rotation * Math.PI) / 180);
-        if (design.flipH) g.scale(-1, 1);
-        if (design.flipV) g.scale(1, -1);
-        g.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
+        if (placement.dx !== 0 || placement.dy !== 0) {
+          g.translate(placement.dx, placement.dy);
+        }
+        if (shouldClipDesign) {
+          clipToTracePath(g, penTracePoints);
+        }
+        // With copies on the bed the mask has to bound this part's artwork rather
+        // than composite over the layer, which holds every part at once.
+        if (design.mask && copies.length > 0) {
+          clipToShapePath(g, design.mask);
+        }
+        if (design.warpMesh) {
+          drawWarpedImage(g, filtered, design.warpMesh, design.opacity);
+        } else {
+          g.save();
+          g.globalAlpha = design.opacity;
+          g.translate(cx, cy);
+          g.rotate((design.rotation * Math.PI) / 180);
+          if (design.flipH) g.scale(-1, 1);
+          if (design.flipV) g.scale(1, -1);
+          g.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
+          g.restore();
+        }
         g.restore();
       }
-      g.restore();
 
       if (maskLayer) {
-maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
+        maskLayerCtx?.setTransform(1, 0, 0, 1, 0, 0);
         // The shapes live in canvas space, so they scale into the bitmap exactly as
-        // the artwork did: by the view, plus its pan offset. The clip then runs at
-        // 1:1 with the workspace bitmap, so the edge stays sharp.
+        // the artwork did: by the view, plus its pan offset.
         const maskScale = dpr * view.zoom;
         const maskOffsetX = dpr * view.panX;
         const maskOffsetY = dpr * view.panY;
-        if (design.mask) {
-          applyMaskToCanvas(maskLayer, design.mask, maskScale, maskScale, maskOffsetX, maskOffsetY);
-        }
-        for (const keepOut of keepOuts) {
-          punchMaskFromCanvas(maskLayer, keepOut, maskScale, maskScale, maskOffsetX, maskOffsetY);
+        for (const placement of placements) {
+          // Each part is masked and punched at its own offset, so a hole belongs to
+          // the part it was placed on.
+          if (design.mask) {
+            applyMaskToCanvas(
+              maskLayer,
+              offsetShape(design.mask, placement.dx, placement.dy),
+              maskScale, maskScale, maskOffsetX, maskOffsetY
+            );
+          }
+          for (const keepOut of keepOuts) {
+            punchMaskFromCanvas(
+              maskLayer,
+              offsetShape(keepOut, placement.dx, placement.dy),
+              maskScale, maskScale, maskOffsetX, maskOffsetY
+            );
+          }
         }
         ctx.drawImage(maskLayer, 0, 0);
       }
@@ -2997,7 +3063,10 @@ const handlePenTracePointMouseDown = useCallback(
       const cy = design.y * scaleY + imgH / 2;
       const filtered = applyFiltersToCanvas(design.element, design.filters, imgW, imgH, eraserMaskRef.current);
       const shouldClipDesign = clipDesignToTrace && penTraceClosed && penTracePoints.length >= 3;
-
+      // Every part on the bed draws the same artwork, at its own offset.
+      const copies = design.partCopies ?? [];
+      const placements = [{ dx: 0, dy: 0 }, ...copies.map((copy) => ({ dx: copy.dx, dy: copy.dy }))];
+      
       // Mask clips at export resolution so the clipped edge stays sharp.
       const keepOuts = design.keepOuts ?? [];
       let maskLayer: HTMLCanvasElement | null = null;
@@ -3014,13 +3083,18 @@ const handlePenTracePointMouseDown = useCallback(
         }
       }
 
-      g.save();
-      if (shouldClipDesign) {
-        clipToTracePath(g, penTracePoints, scaleX, scaleY);
-      }
-      if (design.warpMesh) {
-        const m = design.warpMesh;
-        const scaledMesh: WarpMesh = {
+      for (const placement of placements) {
+        g.save();
+        g.translate(placement.dx * scaleX, placement.dy * scaleY);
+        if (shouldClipDesign) {
+          clipToTracePath(g, penTracePoints, scaleX, scaleY);
+        }
+        if (design.mask && copies.length > 0) {
+          clipToShapePath(g, design.mask, scaleX, scaleY);
+        }
+        if (design.warpMesh) {
+            const m = design.warpMesh;
+            const scaledMesh: WarpMesh = {
           tl: { x: m.tl.x * scaleX, y: m.tl.y * scaleY },
           tr: { x: m.tr.x * scaleX, y: m.tr.y * scaleY },
           bl: { x: m.bl.x * scaleX, y: m.bl.y * scaleY },
@@ -3042,12 +3116,25 @@ const handlePenTracePointMouseDown = useCallback(
         g.drawImage(filtered, -imgW / 2, -imgH / 2, imgW, imgH);
         g.restore();
       }
-      g.restore();
-
+        g.restore();
+      }
+      
       if (maskLayer) {
-        if (design.mask) applyMaskToCanvas(maskLayer, design.mask, scaleX, scaleY);
-        for (const keepOut of keepOuts) {
-          punchMaskFromCanvas(maskLayer, keepOut, scaleX, scaleY);
+        for (const placement of placements) {
+          if (design.mask) {
+            applyMaskToCanvas(
+              maskLayer,
+              offsetShape(design.mask, placement.dx, placement.dy),
+              scaleX, scaleY
+            );
+          }
+          for (const keepOut of keepOuts) {
+            punchMaskFromCanvas(
+              maskLayer,
+              offsetShape(keepOut, placement.dx, placement.dy),
+              scaleX, scaleY
+            );
+          }
         }
         ctx.drawImage(maskLayer, 0, 0);
       }
@@ -3270,8 +3357,9 @@ const handlePenTracePointMouseDown = useCallback(
         : undefined,
       mask: design?.mask ?? null,
       keepOuts: design?.keepOuts ?? [],
+      partCopies: design?.partCopies ?? [],
       clipToTrace: clipDesignToTrace,
-    };
+};
 
     addCustomPreset({
       name,
@@ -3805,8 +3893,68 @@ const handlePenTracePointMouseDown = useCallback(
         [commitDesignUpdate]
         );
         
-          /** Drop every keep-out at once. */
-          const clearKeepOuts = useCallback(() => {
+          // --- Parts on the bed ---
+          /** Copies of the traced part placed elsewhere on the bed. */
+          const partCopies = design?.partCopies ?? [];
+        
+          /**
+           * Place another part. Copies are offsets from the traced outline and share its
+           * artwork placement and keep-outs, so a run of parts engraves identically.
+           */
+          const repeatPart = useCallback(() => {
+            if (!design) {
+              toast.error(t("toast.keepOutNeedsDesign"));
+              return;
+            }
+            if (penTracePoints.length < 3) {
+              toast.error(t("toast.repeatNeedsOutline"));
+              return;
+            }
+            const xs = penTracePoints.map((point) => point.x);
+            const outlineWidth = Math.max(...xs) - Math.min(...xs);
+            const gap = Math.round(outlineWidth * 0.1);
+            const index = (design.partCopies ?? []).length + 1;
+            commitDesignUpdate((current) => ({
+              ...current,
+              partCopies: [
+                ...(current.partCopies ?? []),
+                {
+                  id: `part-${Date.now().toString(36)}-${index}`,
+                  dx: Math.round((outlineWidth + gap) * index),
+                  dy: 0,
+                },
+              ],
+            }));
+            toast.success(t("toast.partRepeated"));
+          }, [design, penTracePoints, commitDesignUpdate, t]);
+        
+          const removePartCopy = useCallback(
+            (id: string) => {
+              commitDesignUpdate((prev) => ({
+                ...prev,
+                partCopies: (prev.partCopies ?? []).filter((copy) => copy.id !== id),
+              }));
+            },
+            [commitDesignUpdate]
+          );
+        
+          /** Move a placed part. Offsets are in canvas pixels; the panel shows inches. */
+          const setPartCopyOffset = useCallback(
+            (id: string, offset: { dx: number; dy: number }, record = true) => {
+              const apply = (prev: ImageState): ImageState => ({
+                ...prev,
+                partCopies: (prev.partCopies ?? []).map((copy) =>
+                  copy.id === id ? { ...copy, ...offset } : copy
+                ),
+              });
+              if (record) commitDesignUpdate(apply);
+              else updateDesignContinuously(apply);
+            },
+            [commitDesignUpdate, updateDesignContinuously]
+          );
+        
+        /** Drop every keep-out at once. */
+        const clearKeepOuts = useCallback(() => {
             commitDesignUpdate((prev) => ({ ...prev, keepOuts: [] }));
             setSelectedKeepOut(null);
           }, [commitDesignUpdate]);
@@ -6508,7 +6656,95 @@ onClick={downloadPenTraceSvg}
                   </p>
                 </div>
               )}
-              {tracePresets.length > 0 && (
+                            {/* Bed layout — the same part repeated across the bed, so a run of
+                                parts can be engraved in one pass. */}
+                            <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-2.5" data-bed-layout>
+                              <div className="flex items-center justify-between gap-2">
+                                <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
+                                  <LayoutTemplate className="h-3.5 w-3.5 text-primary" />
+                                  {t("panel.bed.title")}
+                                </span>
+                                <Button
+                                  variant="secondary"
+                                  size="xs"
+                                  onClick={repeatPart}
+                                  disabled={!design || penTracePoints.length < 3}
+                                  title={t("panel.bed.repeatHint")}
+                                >
+                                  <Plus className="mr-1 h-3 w-3" /> {t("panel.bed.repeat")}
+                                </Button>
+                              </div>
+                              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                                {t("panel.bed.hint")}
+                              </p>
+                              {partCopies.length === 0 ? (
+                                <p className="text-[10px] text-muted-foreground opacity-70">
+                                  {t("panel.bed.none")}
+                                </p>
+                              ) : (
+                                <div className="space-y-1.5">
+                                  {partCopies.map((copy, index) => (
+                                    <div
+                                      key={copy.id}
+                                      className="flex items-center gap-1.5 rounded-md border border-border/50 bg-background/50 p-1.5"
+                                    >
+                                      <span className="w-14 shrink-0 text-[11px] font-medium">
+                                        {t("panel.bed.part", { count: index + 2 })}
+                                      </span>
+                                      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                        X
+                                        <Input
+                                          defaultValue={
+                                            unit === "in"
+                                              ? displayToInches(copy.dx, displayWidth, material.widthIn).toFixed(2)
+                                              : inToMm(displayToInches(copy.dx, displayWidth, material.widthIn)).toFixed(1)
+                                          }
+                                          onBlur={(event) => {
+                                            const entered = parseFloat(event.target.value);
+                                            if (Number.isNaN(entered)) return;
+                                            const inches = unit === "in" ? entered : mmToIn(entered);
+                                            setPartCopyOffset(copy.id, {
+                                              dx: inchesToDisplay(inches, displayWidth, material.widthIn),
+                                              dy: copy.dy,
+                                            });
+                                          }}
+                                          className="h-6 w-16 text-[11px]"
+                                        />
+                                      </label>
+                                      <label className="flex items-center gap-1 text-[10px] text-muted-foreground">
+                                        Y
+                                        <Input
+                                          defaultValue={
+                                            unit === "in"
+                                              ? displayToInches(copy.dy, displayHeight, material.heightIn).toFixed(2)
+                                              : inToMm(displayToInches(copy.dy, displayHeight, material.heightIn)).toFixed(1)
+                                          }
+                                          onBlur={(event) => {
+                                            const entered = parseFloat(event.target.value);
+                                            if (Number.isNaN(entered)) return;
+                                            const inches = unit === "in" ? entered : mmToIn(entered);
+                                            setPartCopyOffset(copy.id, {
+                                              dx: copy.dx,
+                                              dy: inchesToDisplay(inches, displayHeight, material.heightIn),
+                                            });
+                                          }}
+                                          className="h-6 w-16 text-[11px]"
+                                        />
+                                      </label>
+                                      <Button
+                                        variant="ghost"
+                                        size="icon-xs"
+                                        aria-label={t("panel.bed.remove")}
+                                        onClick={() => removePartCopy(copy.id)}
+                                      >
+                                        <Trash2 className="h-3 w-3" />
+                                      </Button>
+                                    </div>
+                                  ))}
+                                </div>
+                              )}
+                            </div>
+                            {tracePresets.length > 0 && (
                 <div className="space-y-2 rounded-md border border-border/60 bg-secondary/20 p-2.5">
                   <div className="flex items-center justify-between gap-2">
                     <span className="flex items-center gap-1.5 text-xs text-muted-foreground">
