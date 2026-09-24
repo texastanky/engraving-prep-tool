@@ -599,11 +599,15 @@ type VectorTool = "select" | "pen" | "line" | "rect" | "ellipse" | "polygon" | "
 type EditorSnapshot = {
   design: ImageState | null;
   vectorObjects: VectorObject[];
+  /** The pen trace is work too: without it, undo skipped over it entirely. */
+  trace: { points: Pt[]; closed: boolean };
 };
 
 function editorSignature(snapshot: EditorSnapshot): string {
   return JSON.stringify([
     snapshot.design ? imageStateSignature(snapshot.design) : null,
+    snapshot.trace.points.map((point) => [point.x, point.y]),
+    snapshot.trace.closed,
     snapshot.vectorObjects.map((object) => [
       object.id,
       object.mode,
@@ -1123,6 +1127,11 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [designHeightInput, setDesignHeightInput] = useState("");
 
   // Undo/redo history
+  /** Mirrors the pen trace so a snapshot never records a half-flushed render. */
+  const latestTraceRef = useRef<{ points: Pt[]; closed: boolean }>({
+    points: penTracePoints,
+    closed: penTraceClosed,
+  });
   const historyRef = useRef<EditorSnapshot[]>([]);
   const historyIndexRef = useRef<number>(-1);
   const continuousEditRef = useRef(false);
@@ -1140,6 +1149,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     (snapshot: EditorSnapshot): EditorSnapshot => ({
       design: snapshot.design ? cloneImageState(snapshot.design) : null,
       vectorObjects: snapshot.vectorObjects.map((object) => cloneVectorObject(object)),
+      trace: {
+        points: snapshot.trace.points.map((point) => ({ ...point })),
+        closed: snapshot.trace.closed,
+      },
     }),
     []
   );
@@ -1149,6 +1162,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     (): EditorSnapshot => ({
       design: latestDesignRef.current,
       vectorObjects: latestVectorRef.current,
+      trace: {
+        points: [...latestTraceRef.current.points],
+        closed: latestTraceRef.current.closed,
+      },
     }),
     []
   );
@@ -1184,6 +1201,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       latestVectorRef.current = clone.vectorObjects;
       setDesign(clone.design);
       setVectorObjects(clone.vectorObjects);
+      latestTraceRef.current = clone.trace;
+      setPenTracePoints(clone.trace.points);
+      setPenTraceClosed(clone.trace.closed);
+      setPenTraceHover(null);
       lastHistorySignatureRef.current = editorSignature(clone);
       updateUndoRedoState();
     },
@@ -1216,9 +1237,9 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     const snapshot = cloneImageState(next);
     latestDesignRef.current = snapshot;
     setDesign(snapshot);
-    pushHistory({ design: snapshot, vectorObjects: latestVectorRef.current });
+    pushHistory(currentSnapshot());
     updateUndoRedoState();
-  }, [pushHistory, updateUndoRedoState]);
+  }, [currentSnapshot, pushHistory, updateUndoRedoState]);
 
   const commitDesignUpdate = useCallback((updater: (state: ImageState) => ImageState) => {
     const current = latestDesignRef.current;
@@ -1244,15 +1265,15 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       latestVectorRef.current = next;
       setVectorObjects(next);
       if (record) {
-        pushHistory({ design: latestDesignRef.current, vectorObjects: next });
+        pushHistory(currentSnapshot());
         updateUndoRedoState();
       }
     },
-    [pushHistory, updateUndoRedoState]
+    [currentSnapshot, pushHistory, updateUndoRedoState]
   );
 
-  /** Record the current vector state — used when a drag finishes. */
-  const commitVectorChange = useCallback(() => {
+  /** Record the settled state — used when a drag or a gesture finishes. */
+  const commitSnapshot = useCallback(() => {
     pushHistory(currentSnapshot());
     updateUndoRedoState();
   }, [pushHistory, currentSnapshot, updateUndoRedoState]);
@@ -1328,23 +1349,30 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   useEffect(() => {
     latestVectorRef.current = vectorObjects;
   }, [vectorObjects]);
-
-  // Track design changes into history. Restores from undo/redo are ignored
-  // automatically because pushHistory drops duplicate signatures.
+  
   useEffect(() => {
-    if (!design) return;
-    if (isDragging || continuousEditRef.current) {
-      return;
-    }
-    pushHistory({ design, vectorObjects: latestVectorRef.current });
+    latestTraceRef.current = { points: penTracePoints, closed: penTraceClosed };
+  }, [penTracePoints, penTraceClosed]);
+
+  // Track settled edits into history — every layer, with or without a design
+  // loaded. Recording only the design and the vector layer meant an undo after
+  // tracing silently reverted whatever design change came before it, which read
+  // as history skipping around. Restores are ignored because pushHistory drops
+  // duplicate signatures.
+  useEffect(() => {
+    if (isDragging || continuousEditRef.current) return;
+    pushHistory(currentSnapshot());
     updateUndoRedoState();
-  }, [design, isDragging, pushHistory, updateUndoRedoState]);
+  }, [
+    design, vectorObjects, penTracePoints, penTraceClosed, isDragging,
+    currentSnapshot, pushHistory, updateUndoRedoState,
+  ]);
 
   // Seed history so the very first edit (on either layer) has something to
   // return to.
   useEffect(() => {
     if (historyRef.current.length > 0) return;
-    pushHistory({ design: latestDesignRef.current, vectorObjects: latestVectorRef.current });
+    pushHistory(currentSnapshot());
     updateUndoRedoState();
   }, [pushHistory, updateUndoRedoState]);
 
@@ -2235,31 +2263,41 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     [displayWidth, displayHeight, penTraceClosed]
   );
 
-  const handlePenTracePointMouseDown = useCallback(
+const handlePenTracePointMouseDown = useCallback(
     (e: React.MouseEvent, pointIndex: number) => {
       e.stopPropagation();
       e.preventDefault();
       penTraceDragPointRef.current = pointIndex;
-
+  
       const onMove = (ev: MouseEvent) => {
         const point = clampPointToCanvas(getPos(ev.clientX, ev.clientY), displayWidth, displayHeight);
+        // Dragging a point is one undo step, not one per mouse move.
+        continuousEditRef.current = true;
+        latestTraceRef.current = {
+          points: latestTraceRef.current.points.map((existing, index) =>
+            index === pointIndex ? point : existing
+          ),
+          closed: latestTraceRef.current.closed,
+        };
         setPenTracePoints((current) =>
           current.map((existing, index) => (index === pointIndex ? point : existing))
         );
       };
-
+  
       const onUp = () => {
         penTraceDragPointRef.current = null;
+        continuousEditRef.current = false;
+        commitSnapshot();
         window.removeEventListener("mousemove", onMove);
         window.removeEventListener("mouseup", onUp);
       };
-
+  
       window.addEventListener("mousemove", onMove);
       window.addEventListener("mouseup", onUp);
     },
-    [displayWidth, displayHeight, getPos]
+    [displayWidth, displayHeight, getPos, commitSnapshot]
   );
-
+  
   const getEraserPosInDesign = useCallback((canvasX: number, canvasY: number): { x: number; y: number } | null => {
     if (!design) return null;
     const imgW = design.naturalWidth * design.scale * design.scaleX;
@@ -2466,7 +2504,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     // A finished move drag collapses into a single undo entry.
     if (vectorMoveRef.current) {
       vectorMoveRef.current = null;
-      commitVectorChange();
+      commitSnapshot();
     }
 
     // Commit a shape that was dragged out with a shape tool. The ref is the
@@ -2492,7 +2530,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
     }
   }, [
     isDragging, commitCurrentDesign, vectorTool, dragBox, subpathsForTool,
-    applyVectorChange, commitVectorChange, setSelectedVectorId,
+    applyVectorChange, commitSnapshot, setSelectedVectorId,
   ]);
 
   const handleTouchStart = useCallback(
@@ -2952,6 +2990,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [canUndo, canUndoPenTrace, handleUndo, penTraceActive, undoPenTracePoint]);
 
   const clearPenTrace = useCallback(() => {
+    // The ref moves in step so a snapshot taken right after this — a compound
+    // action like handing the trace to the keep-out list — sees the settled
+    // state instead of the trace that is on its way out.
+    latestTraceRef.current = { points: [], closed: false };
     setPenTracePoints([]);
     setPenTraceClosed(false);
     setPenTraceHover(null);
@@ -3626,14 +3668,14 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       return;
     }
     const nextIndex = (design.keepOuts ?? []).length;
+    // Clear the trace first, so the single history entry this records is the
+    // settled state: keep-out added, trace gone.
+    clearPenTrace();
+    setPenTraceActive(false);
     commitDesignUpdate((prev) => ({ ...prev, keepOuts: [...(prev.keepOuts ?? []), keepOut] }));
     setSelectedKeepOut(nextIndex);
-    setPenTracePoints([]);
-    setPenTraceClosed(false);
-    setPenTraceActive(false);
-    setPenTraceHover(null);
     toast.success(t("toast.keepOutFromTrace"));
-  }, [design, penTracePoints, commitDesignUpdate, t]);
+    }, [design, penTracePoints, clearPenTrace, commitDesignUpdate, t]);
 
   /**
    * Drag or resize a shape on the canvas: the clipping mask ("mask") or one of
@@ -3759,7 +3801,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       };
 
       const onUp = () => {
-        commitVectorChange();
+        commitSnapshot();
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
@@ -3769,7 +3811,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
     },
-    [selectedVector, getPos, applyVectorChange, commitVectorChange]
+    [selectedVector, getPos, applyVectorChange, commitSnapshot]
   );
 
   /** Combine the selected shapes with a boolean operation. */
@@ -4129,7 +4171,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       };
 
       const onUp = () => {
-        commitVectorChange();
+        commitSnapshot();
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
@@ -4139,7 +4181,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
     },
-    [selectedVector, getPos, applyVectorChange, commitVectorChange]
+    [selectedVector, getPos, applyVectorChange, commitSnapshot]
   );
 
   /** Node editing: drag a bezier handle. */
@@ -4168,7 +4210,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       };
 
       const onUp = () => {
-        commitVectorChange();
+        commitSnapshot();
         window.removeEventListener("pointermove", onMove);
         window.removeEventListener("pointerup", onUp);
         window.removeEventListener("pointercancel", onUp);
@@ -4178,7 +4220,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.addEventListener("pointerup", onUp);
       window.addEventListener("pointercancel", onUp);
     },
-    [selectedVector, getPos, applyVectorChange, commitVectorChange]
+    [selectedVector, getPos, applyVectorChange, commitSnapshot]
   );
 
   /** Insert a node where the user double-clicked, when near the path. */
@@ -7208,7 +7250,7 @@ onClick={downloadPenTraceSvg}
                                   max={8}
                                   step={0.5}
                                   onValueChange={([value]) => setVectorStrokeWidth(object.id, value, false)}
-                                  onValueCommit={() => commitVectorChange()}
+                                  onValueCommit={() => commitSnapshot()}
                                 />
                               </div>
                             )}
