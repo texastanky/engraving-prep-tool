@@ -97,6 +97,7 @@ function localApiPlugin(): Plugin {
     ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
+    ["/api/presets", "presets.js"],
   ]);
 
   return {

@@ -1,7 +1,12 @@
 /**
- * Hook for managing custom part outline presets stored in localStorage.
+ * Hook for managing custom part outline presets.
+ *
+ * The list is kept in a file through the local API, with localStorage as the
+ * fallback for a plain browser. Browser storage is keyed to the page's origin,
+ * and the desktop app served its page from a different port every launch — so
+ * parts saved in the workspace did not survive a restart. A file does.
  */
-import { useState, useCallback } from "react";
+import { useState, useCallback, useEffect } from "react";
 import type { DesignMask } from "../_components/design-mask.ts";
 
 export type CustomPresetPoint = {
@@ -97,8 +102,50 @@ function savePresets(presets: CustomPreset[]): void {
   }
 }
 
+/** The saved parts, from the app's file store. Null when there is no store. */
+async function loadFromStore(): Promise<CustomPreset[] | null> {
+  try {
+    const response = await fetch("/api/presets");
+    if (!response.ok) return null;
+    const payload = await response.json();
+    if (!Array.isArray(payload?.presets)) return null;
+    return payload.presets.filter(
+      (preset: CustomPreset) => preset && typeof preset.id === "string"
+    );
+  } catch {
+    return null;
+  }
+}
+
+async function saveToStore(presets: CustomPreset[]): Promise<void> {
+  try {
+    await fetch("/api/presets", {
+      method: "PUT",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ presets }),
+    });
+  } catch {
+    // The localStorage mirror above stands in for it.
+  }
+}
+
 export function useCustomPresets() {
   const [presets, setPresets] = useState<CustomPreset[]>(() => loadPresets());
+
+  // Adopt the file store once it answers. localStorage can be empty simply
+  // because the app landed on a new port again, which is no reason to lose parts.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const stored = await loadFromStore();
+      if (cancelled || !stored) return;
+      setPresets(stored);
+      savePresets(stored);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const addPreset = useCallback((preset: Omit<CustomPreset, "id">) => {
     const newPreset: CustomPreset = {
@@ -108,6 +155,7 @@ export function useCustomPresets() {
     setPresets((prev) => {
       const updated = [...prev, newPreset];
       savePresets(updated);
+      void saveToStore(updated);
       return updated;
     });
     return newPreset.id;
@@ -117,6 +165,7 @@ export function useCustomPresets() {
     setPresets((prev) => {
       const updated = prev.filter((p) => p.id !== id);
       savePresets(updated);
+      void saveToStore(updated);
       return updated;
     });
   }, []);

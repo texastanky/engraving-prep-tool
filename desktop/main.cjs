@@ -58,6 +58,10 @@ async function ensureDesktopAuthEnv() {
     process.env.AUTH_USER_FILE = path.join(userData, "auth-users.json");
   }
 
+  if (!process.env.PRESET_STORE_FILE) {
+    process.env.PRESET_STORE_FILE = path.join(userData, "parts-presets.json");
+  }
+
   if (!process.env.AUTH_COOKIE_SECURE) {
     process.env.AUTH_COOKIE_SECURE = "false";
   }
@@ -162,6 +166,7 @@ async function startBundledServer() {
     ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
+    ["/api/presets", "presets.js"],
   ]);
 
   const server = http.createServer(async (req, res) => {
@@ -186,16 +191,46 @@ async function startBundledServer() {
     }
   });
 
-  return new Promise((resolve, reject) => {
-    server.on("error", reject);
-    server.listen(0, "127.0.0.1", () => {
-      const address = server.address();
-      resolve({
-        server,
-        url: `http://127.0.0.1:${address.port}`,
-      });
+  // Serve from the same port as last time where possible. The renderer's storage
+  // (settings, language, the guide state) is keyed to its origin, and the origin
+  // includes the port — a new port every launch meant every restart began from
+  // nothing. Saved parts no longer depend on this, but the rest still does.
+  const portFile = path.join(app.getPath("userData"), "last-port.txt");
+  let preferredPort = 0;
+  try {
+    const stored = Number((await fsp.readFile(portFile, "utf8")).trim());
+    if (Number.isInteger(stored) && stored > 1024 && stored < 65536) preferredPort = stored;
+  } catch {
+    // First run, or the file is unreadable: any free port will do.
+  }
+
+  const listen = (port) =>
+    new Promise((resolve, reject) => {
+      const onError = (error) => {
+        server.off("listening", onListening);
+        if (error && error.code === "EADDRINUSE" && port !== 0) {
+          // Something else has the port; take a free one rather than not start.
+          listen(0).then(resolve, reject);
+          return;
+        }
+        reject(error);
+      };
+      const onListening = () => {
+        server.off("error", onError);
+        resolve(server.address().port);
+      };
+      server.once("error", onError);
+      server.once("listening", onListening);
+      server.listen(port, "127.0.0.1");
     });
-  });
+
+  const port = await listen(preferredPort);
+  await fsp.writeFile(portFile, String(port), "utf8").catch(() => {});
+
+  return {
+    server,
+    url: `http://127.0.0.1:${port}`,
+  };
 }
 
 function createWindow(startUrl) {
