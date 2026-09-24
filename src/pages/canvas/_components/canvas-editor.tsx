@@ -38,6 +38,7 @@ import {
   Minimize2,
   Ban,
   Plus,
+  Check,
   Move,
   ZoomIn,
   ZoomOut,
@@ -628,6 +629,18 @@ function editorSignature(snapshot: EditorSnapshot): string {
 }
 
 type VectorIcon = React.ComponentType<{ className?: string }>;
+
+/** One row in a menu bar dropdown. */
+type MenuEntry =
+  | { kind: "separator" }
+  | {
+      kind: "item";
+      label: string;
+      icon?: VectorIcon;
+      onSelect: () => void;
+      disabled?: boolean;
+      checked?: boolean;
+    };
 
 const VECTOR_TOOLS: { id: VectorTool; label: string; hint: string; icon: VectorIcon }[] = [
   { id: "select", label: "Select", hint: "Click an object to select it, then drag to move it.", icon: MousePointer2 },
@@ -3640,16 +3653,35 @@ const handlePenTracePointMouseDown = useCallback(
         const list = prev.keepOuts ?? [];
         if (!list[index]) return prev;
         return {
-          ...prev,
-          // Changing the shape drops any traced outline: the library shape takes over.
-          keepOuts: list.map((shape, i) =>
-            i === index ? changeMaskShape({ ...shape, path: undefined }, shapeId) : shape
-          ),
+        ...prev,
+        // Changing the shape drops any traced outline: the library shape takes over.
+        keepOuts: list.map((shape, i) =>
+        i === index ? changeMaskShape({ ...shape, path: undefined }, shapeId) : shape
+        ),
         };
-      });
-    },
-    [commitDesignUpdate]
-  );
+        });
+        },
+        [commitDesignUpdate]
+        );
+        
+          /** Drop every keep-out at once. */
+          const clearKeepOuts = useCallback(() => {
+            commitDesignUpdate((prev) => ({ ...prev, keepOuts: [] }));
+            setSelectedKeepOut(null);
+          }, [commitDesignUpdate]);
+        
+          /** Remove the design layer, and the saved position that goes with it. */
+          const removeDesign = useCallback(() => {
+            latestDesignRef.current = null;
+            setDesign(null);
+            setDesignSrc(null);
+            savedDesignStateRef.current = null;
+            setSelectedKeepOut(null);
+            if (designInputRef.current) designInputRef.current.value = "";
+            pushHistory(currentSnapshot());
+            updateUndoRedoState();
+          }, [currentSnapshot, pushHistory, updateUndoRedoState]);
+        
   
   /**
    * Hand the finished trace to the keep-out list, then clear the trace so the next
@@ -4692,8 +4724,110 @@ const handlePenTracePointMouseDown = useCallback(
     </>
   );
 
+    /**
+     * The menu bar: the editor's tools grouped by what they act on, so a tool can
+     * be found without scrolling a side panel. Every entry calls the same handler,
+     * and carries the same disabled state, as the button it mirrors.
+     */
+    const menuGroups: { id: string; label: string; items: MenuEntry[] }[] = [
+      {
+        id: "file",
+        label: t("menu.file"),
+        items: [
+          { kind: "item", label: t("menu.file.importDesign"), icon: Upload, onSelect: () => designInputRef.current?.click() },
+          { kind: "item", label: t("menu.file.importPart"), icon: ImageIcon, onSelect: () => partInputRef.current?.click() },
+          { kind: "item", label: t("menu.file.importVector"), icon: PenTool, onSelect: () => vectorImportRef.current?.click() },
+          { kind: "separator" },
+          { kind: "item", label: t("editor.export.svgXtool"), icon: Download, onSelect: handleExportSvg, disabled: !canExport },
+          { kind: "item", label: t("editor.export.png"), onSelect: handleExportPng, disabled: !canExport },
+          { kind: "item", label: t("editor.export.jpegWhite"), onSelect: () => handleExportJpeg("white"), disabled: !canExport },
+          { kind: "item", label: t("editor.export.jpegBlack"), onSelect: () => handleExportJpeg("black"), disabled: !canExport },
+          { kind: "item", label: t("editor.export.pdf"), onSelect: handleExportPdf, disabled: !canExport },
+        ],
+      },
+      {
+        id: "edit",
+        label: t("menu.edit"),
+        items: [
+          { kind: "item", label: t("editor.tooltip.undo"), icon: Undo2, onSelect: handleHeaderUndo, disabled: !canUseUndo },
+          { kind: "item", label: t("editor.tooltip.redo"), icon: Redo2, onSelect: handleRedo, disabled: !canRedo },
+          { kind: "separator" },
+          { kind: "item", label: t("menu.edit.undoPoint"), icon: Undo2, onSelect: undoPenTracePoint, disabled: penTracePoints.length === 0 },
+          { kind: "item", label: t("panel.penTrace.clear"), icon: Trash2, onSelect: clearPenTrace, disabled: penTracePoints.length === 0 },
+          { kind: "item", label: t("panel.keepOut.clear"), icon: Trash2, onSelect: clearKeepOuts, disabled: keepOuts.length === 0 },
+          { kind: "item", label: t("panel.mask.remove"), icon: Trash2, onSelect: removeMask, disabled: !design?.mask },
+          { kind: "item", label: t("menu.edit.removeDesign"), icon: Trash2, onSelect: removeDesign, disabled: !design },
+        ],
+      },
+      {
+        id: "view",
+        label: t("menu.view"),
+        items: [
+          { kind: "item", label: t("editor.zoom.in"), icon: ZoomIn, onSelect: () => stepZoom(1) },
+          { kind: "item", label: t("editor.zoom.out"), icon: ZoomOut, onSelect: () => stepZoom(-1) },
+          { kind: "item", label: t("editor.zoom.reset"), icon: RefreshCw, onSelect: resetView, disabled: view.zoom === 1 },
+          { kind: "item", label: t("editor.zoom.pan"), icon: Hand, onSelect: () => setPanMode((value) => !value), checked: panMode },
+          { kind: "separator" },
+          { kind: "item", label: t("editor.tooltip.ruler"), icon: Ruler, onSelect: () => setShowRuler((value) => !value), checked: showRuler },
+          { kind: "item", label: t("editor.tooltip.workspaceResize"), icon: Maximize2, onSelect: () => setResizeMode((value) => !value), checked: resizeMode },
+          { kind: "item", label: t("menu.view.panels"), icon: LayoutTemplate, onSelect: () => setReferenceRailOpen((value) => !value), checked: referenceRailOpen },
+        ],
+      },
+      {
+        id: "trace",
+        label: t("menu.trace"),
+        items: [
+          { kind: "item", label: penTraceActive ? t("panel.penTrace.done") : t("panel.penTrace.start"), icon: PenTool, onSelect: () => setPenTraceActive((value) => !value), checked: penTraceActive },
+          { kind: "item", label: t("panel.penTrace.close"), onSelect: closePenTrace, disabled: penTracePoints.length < 3 || penTraceClosed },
+          { kind: "item", label: t("menu.edit.undoPoint"), icon: Undo2, onSelect: undoPenTracePoint, disabled: penTracePoints.length === 0 },
+          { kind: "item", label: t("panel.penTrace.clear"), icon: Trash2, onSelect: clearPenTrace, disabled: penTracePoints.length === 0 },
+          { kind: "separator" },
+          { kind: "item", label: t("panel.penTrace.useAsDesign"), icon: Sparkles, onSelect: applyPenTraceAsDesign, disabled: penTracePoints.length < 2 },
+          { kind: "item", label: t("panel.keepOut.useTrace"), icon: Ban, onSelect: useTraceAsKeepOut, disabled: penTracePoints.length < 3 },
+          { kind: "item", label: t("panel.penTrace.downloadSvg"), icon: Download, onSelect: downloadPenTraceSvg, disabled: penTracePoints.length < 2 },
+        ],
+      },
+      {
+        id: "marks",
+        label: t("menu.marks"),
+        items: [
+          { kind: "item", label: t("panel.keepOut.addEllipse"), icon: Circle, onSelect: () => addKeepOut("ellipse"), disabled: !design },
+          { kind: "item", label: t("panel.keepOut.addRect"), icon: Square, onSelect: () => addKeepOut("rect"), disabled: !design },
+          { kind: "item", label: t("panel.keepOut.clear"), icon: Trash2, onSelect: clearKeepOuts, disabled: keepOuts.length === 0 },
+          { kind: "separator" },
+          { kind: "item", label: t("panel.eraser.eraser"), icon: Eraser, onSelect: () => setEraserActive((value) => !value), checked: eraserActive, disabled: !design },
+          { kind: "item", label: t("panel.design.removeBackground"), icon: Wand2, onSelect: handleRemoveBackground, disabled: !design },
+          { kind: "item", label: t("panel.design.roundCorners"), icon: Frame, onSelect: handleRoundCorners, disabled: !design },
+          { kind: "item", label: t("panel.design.crop"), icon: Crop, onSelect: () => setCropOpen(true), disabled: !design },
+        ],
+      },
+      {
+        id: "tools",
+        label: t("menu.tools"),
+        items: [
+          { kind: "item", label: t("menu.tools.select"), icon: MousePointer2, onSelect: () => setVectorTool("select"), checked: vectorTool === "select" },
+          { kind: "item", label: t("menu.tools.pen"), icon: PenTool, onSelect: () => setVectorTool("pen"), checked: vectorTool === "pen" },
+          { kind: "item", label: t("menu.tools.rect"), icon: Square, onSelect: () => setVectorTool("rect"), checked: vectorTool === "rect" },
+          { kind: "item", label: t("menu.tools.ellipse"), icon: Circle, onSelect: () => setVectorTool("ellipse"), checked: vectorTool === "ellipse" },
+          { kind: "item", label: t("menu.tools.star"), icon: Star, onSelect: () => setVectorTool("star"), checked: vectorTool === "star" },
+          { kind: "separator" },
+          { kind: "item", label: t("menu.tools.warp"), icon: GripHorizontal, onSelect: () => setWarpMode((value) => !value), checked: warpMode, disabled: !design },
+          { kind: "item", label: t("menu.tools.nodes"), icon: MousePointer2, onSelect: () => setVectorNodeMode((value) => !value), checked: vectorNodeMode, disabled: !selectedVector },
+        ],
+      },
+      {
+        id: "help",
+        label: t("menu.help"),
+        items: [
+          { kind: "item", label: t("menu.help.guide"), icon: Sparkles, onSelect: () => setGuideOpen(true) },
+          { kind: "item", label: t("menu.help.shortcuts"), icon: Languages, onSelect: () => document.getElementById("keyboard-shortcuts")?.scrollIntoView({ behavior: "smooth", block: "start" }) },
+        ],
+      },
+    ];
+  
+  
   return (
-    <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col">
+  <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col">
       {cropOpen && designSrc && (
         <CropModal
           open={cropOpen}
@@ -4906,11 +5040,48 @@ const handlePenTracePointMouseDown = useCallback(
                 <DropdownMenuItem onClick={handleExportPdf}>
                   {t("editor.export.pdf")}
                 </DropdownMenuItem>
-              </DropdownMenuContent>
-            </DropdownMenu>
-          </div>
-        </div>
-      </header>
+                </DropdownMenuContent>
+                </DropdownMenu>
+                </div>
+                </div>
+
+                {/* Menu bar — the tools, grouped, so nothing has to be hunted for by
+                    scrolling a side panel. Every entry mirrors a button that still exists
+                    below, sharing its handler and its disabled state. */}
+                <nav className="mx-auto flex max-w-7xl flex-wrap items-center gap-0.5 pt-1.5" data-menu-bar>
+                  {menuGroups.map((group) => (
+                    <DropdownMenu key={group.id}>
+                      <DropdownMenuTrigger asChild>
+                        <Button
+                          variant="ghost"
+                          size="xs"
+                          className="h-6 px-2 text-xs font-normal data-[state=open]:bg-secondary"
+                        >
+                          {group.label}
+                        </Button>
+                      </DropdownMenuTrigger>
+                      <DropdownMenuContent align="start" className="min-w-[230px]">
+                        {group.items.map((item, index) =>
+                          item.kind === "separator" ? (
+                            <DropdownMenuSeparator key={`sep-${group.id}-${index}`} />
+                          ) : (
+                            <DropdownMenuItem
+                              key={`${group.id}-${item.label}`}
+                              disabled={item.disabled}
+                              onSelect={item.onSelect}
+                              className="text-xs"
+                            >
+                              {item.icon ? <item.icon className="mr-2 h-3.5 w-3.5" /> : null}
+                              <span className="flex-1">{item.label}</span>
+                              {item.checked ? <Check className="h-3.5 w-3.5" /> : null}
+                            </DropdownMenuItem>
+                          )
+                        )}
+                      </DropdownMenuContent>
+                    </DropdownMenu>
+                  ))}
+                </nav>
+                </header>
 
       <div className="flex-1 mx-auto max-w-7xl w-full px-3 py-3 sm:px-4 sm:py-6">
         <div className={`grid min-w-0 gap-4 sm:gap-6 ${referenceRailOpen ? "grid-cols-[280px_minmax(0,1fr)_280px]" : "lg:grid-cols-[280px_1fr]"}`}>
@@ -6314,7 +6485,7 @@ onClick={downloadPenTraceSvg}
                   className="w-full text-destructive hover:text-destructive"
                   onClick={() => { setDesign(null); setDesignSrc(null); savedDesignStateRef.current = null; if (designInputRef.current) designInputRef.current.value = ""; }}
                 >
-                  <Trash2 className="mr-2 h-3.5 w-3.5" /> Remove Design
+                  <Trash2 className="mr-2 h-3.5 w-3.5" /> {t("menu.edit.removeDesign")}
                 </Button>
               )}
               <p className="text-[10px] text-muted-foreground opacity-60">{t("panel.design.helper")}</p>
@@ -6963,7 +7134,7 @@ onClick={downloadPenTraceSvg}
                 </Tabs>
 
                 {/* Keyboard shortcuts */}
-                <div className="rounded-md border border-border/50 p-3 space-y-2 mt-2 hidden lg:block">
+                <div id="keyboard-shortcuts" className="rounded-md border border-border/50 p-3 space-y-2 mt-2 hidden lg:block">
                   <p className="text-[10px] uppercase tracking-wider text-muted-foreground font-medium">Keyboard Shortcuts</p>
                   <ul className="text-[10px] text-muted-foreground space-y-1.5">
                     <li className="flex items-center gap-2"><kbd className="rounded border border-border bg-secondary px-1.5 py-0.5 font-mono">R</kbd> Rotate 15°</li>
