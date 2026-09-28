@@ -11,27 +11,67 @@ legal advice, and nothing here determines whether a marking is compliant.
 | `AUTH_ADMIN_EMAIL` / `AUTH_ADMIN_PASSWORD` | Static owner account, no registration needed               | Optional                         |
 | `AUTH_DISABLE_REGISTRATION`                | Set to `true` to stop strangers creating accounts          | Recommended once customers exist |
 | `AUTH_SIGNUP_CODE`                         | Required code for registration                             | Optional                         |
-| `LICENSE_SECRET`                           | Signs licence keys and entitlements (16+ chars)            | Required to sell licences        |
+| `LICENSE_SECRET`                           | Signs offline entitlement tokens; legacy PGS1 dev keys      | Recommended when selling         |
 | `LICENSE_STORE_FILE`                       | Where usage counters live (default `.data/licensing.json`) | Optional                         |
 | `OPENAI_API_KEY`                           | Server-side key for the AI features                        | Optional                         |
 
-If `LICENSE_SECRET` is unset, no licence key can ever verify and the app runs on
-the free tier. It fails closed rather than open.
+If `LICENSE_SECRET` is unset, offline entitlement tokens cannot be issued and
+legacy PGS1 keys can never verify — but PGS2 customer keys are unaffected,
+because they verify against the public key that ships with the app. With no
+public key and no secret, the app falls back to the free tier rather than
+failing open.
 
-## Issuing a licence key
+## Selling licence keys
 
-Keys are `PGS1.<payload>.<signature>`, signed with `LICENSE_SECRET`. Issue them
-from any machine that has the secret:
+Customer keys are **PGS2** — Ed25519-signed. The app carries only the public
+half (`server/license-public.pem`), so a key cannot be forged, upgraded, or
+edited into existence, however much of their own machine a customer can see.
+`PGS1` keys still exist for local development and keep working.
+
+### One-time setup (already done on the build machine — do not repeat)
 
 ```bash
-node --input-type=module -e "
-  const { issueLicenseKey } = await import('./server/licensing.js');
-  console.log(issueLicenseKey({ sub: 'customer@example.com', plan: 'shop' }));
-"
+node scripts/licence-keys.cjs init
 ```
 
-Add `expiresAt: '2027-01-01T00:00:00.000Z'` for a subscription term; leave it off
-for a perpetual licence. The customer pastes the key into the app's Licence card.
+Writes `license-private.pem` (**signs every key you will ever sell** — never
+commit or ship it; back it up somewhere you will not lose, because losing it
+orphans every key already sold) and `server/license-public.pem` (safe to ship;
+it goes into the installer with the rest of `server/`).
+
+### Issuing a key for a customer
+
+```bash
+node scripts/licence-keys.cjs issue --sub customer@example.com --plan pro
+node scripts/licence-keys.cjs issue --sub customer@example.com --plan shop --days 365
+```
+
+- `--plan` is `pro` or `shop`.
+- `--days` sets a subscription term; leave it off for a perpetual licence.
+- Send the printed `PGS2...` line to the customer; they paste it into the app's
+  **Licence** card.
+- Every issued key is appended to `license-issued.json` beside the private key
+  (gitignored) — your sales ledger, so a "what did I buy?" email can be answered
+  in seconds.
+
+### Checking a key before sending it
+
+```bash
+node scripts/licence-keys.cjs verify PGS2.xxxxx
+```
+
+Runs the app's own verifier and explains any failure (`bad_signature`,
+`expired`, `malformed_key`, ...). Use it before delivery, or when a customer
+reports their key will not accept.
+
+### If a customer's key will not activate
+
+1. `verify` the key from your side.
+2. If it verifies for you but not on their machine, check the build shipped
+   `server/license-public.pem` — without it the app reports
+   `licensing_not_configured` and stays on the free tier.
+3. For an expired subscription, issue a fresh key and send it with a short
+   note.
 
 ## Plans and limits
 
@@ -49,7 +89,7 @@ truth for both the server checks and the numbers shown in the app.
 | Check            | Enforced by                         | Honest assessment                                                           |
 | ---------------- | ----------------------------------- | --------------------------------------------------------------------------- |
 | AI call quota    | Server, before the provider call    | Genuinely enforced: the provider key is server-side                         |
-| Licence validity | Server, signature checked           | Genuinely enforced: keys cannot be forged without the secret                |
+| Licence validity | Server, Ed25519 signature checked against the shipped public key | Genuinely enforced: a key cannot be forged, edited, or extended |
 | Export allowance | Server counter, asked by the client | A speed bump. Exports run locally, so a patched client can skip the request |
 
 Because of that last row, do not treat export counting as copy protection. The

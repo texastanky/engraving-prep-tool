@@ -8,7 +8,12 @@
  *       Writes  server/license-public.pem  (safe to ship; goes in the bundle)
  *
  *   node scripts/licence-keys.cjs issue --sub buyer@example.com --plan pro [--days 365]
- *       Prints a PGS2 licence key to send to that buyer.
+ *       Prints a PGS2 licence key to send to that buyer, and records it in
+ *       license-issued.json (local, gitignored — your sales ledger).
+ *
+ *   node scripts/licence-keys.cjs verify PGS2.xxxxx
+ *       Checks a key the same way the app does — run it before you send one out,
+ *       or when a customer says theirs will not accept.
  *
  * Why asymmetric rather than HMAC: the app must be able to VERIFY a key, but not
  * CREATE one. A symmetric secret would have to ship inside the app in order to
@@ -22,10 +27,12 @@
 const crypto = require("node:crypto");
 const fs = require("node:fs");
 const path = require("node:path");
+const { pathToFileURL } = require("node:url");
 
 const ROOT = path.resolve(__dirname, "..");
 const PRIVATE_PATH = path.join(ROOT, "license-private.pem");
 const PUBLIC_PATH = path.join(ROOT, "server", "license-public.pem");
+const ISSUED_LOG = path.join(ROOT, "license-issued.json");
 const PREFIX = "PGS2";
 
 function fail(message) {
@@ -80,20 +87,66 @@ function issue() {
   ).toString("base64url");
 
   const signature = crypto.sign(null, Buffer.from(payload), privateKey).toString("base64url");
+  const key = `${PREFIX}.${payload}.${signature}`;
 
-  console.log(`${PREFIX}.${payload}.${signature}`);
+  // Keep a local record of what was sold, beside the signing key. Never shipped
+  // or committed (gitignored); it exists so a re-issue request can be answered
+  // ("what plan did Bob buy, and until when?") without guessing.
+  try {
+    const log = fs.existsSync(ISSUED_LOG) ? JSON.parse(fs.readFileSync(ISSUED_LOG, "utf8")) : [];
+    log.push({ issuedAt: new Date().toISOString(), sub, plan, exp, key });
+    fs.writeFileSync(ISSUED_LOG, JSON.stringify(log, null, 2));
+  } catch (error) {
+    console.error(`Warning: could not record the key in ${ISSUED_LOG}: ${error.message}`);
+  }
+
+  console.log(key);
   console.log("");
   console.error(`  for : ${sub}`);
   console.error(`  plan: ${plan}`);
   console.error(`  exp : ${exp ?? "never expires"}`);
 }
 
+/** Plain-language hints for the reasons the app can reject a key. */
+const REASON_HINTS = {
+  bad_signature: "The key was edited or truncated, or it was issued by a different keypair.",
+  expired: "Past its expiry date. Re-issue with: licence-keys.cjs issue --sub ... --days ...",
+  malformed_key: "Not in PGS2.<payload>.<signature> form — check for characters lost when pasting.",
+  malformed_payload: "The payload is not valid base64url JSON — the key was likely cut short.",
+  licensing_not_configured: "server/license-public.pem is missing or unreadable.",
+  unknown_plan: "Signed for an unknown plan ('free' is not a licence).",
+};
+
+async function verify() {
+  const key = process.argv[3] ?? process.env.KEY;
+  if (!key) fail("Usage: licence-keys.cjs verify <PGS2 key>");
+
+  // Use the app's own verifier, so this command cannot drift from what ships.
+  const { verifyLicenseKey } = await import(
+    pathToFileURL(path.join(ROOT, "server", "licensing.js")).href
+  );
+  const result = verifyLicenseKey(key);
+
+  if (result.ok) {
+    console.log("OK — this key will activate in the app.");
+    console.log(`  for : ${result.sub}`);
+    console.log(`  plan: ${result.plan}`);
+    console.log(`  exp : ${result.expiresAt ?? "never expires"}`);
+    return;
+  }
+
+  const hint = REASON_HINTS[result.reason];
+  fail(`Key is NOT valid: ${result.reason}${hint ? `\n  ${hint}` : ""}`);
+}
+
 const command = process.argv[2];
 if (command === "init") init();
 else if (command === "issue") issue();
+else if (command === "verify") verify();
 else {
   console.log("Usage:");
   console.log("  node scripts/licence-keys.cjs init");
   console.log("  node scripts/licence-keys.cjs issue --sub buyer@example.com --plan pro [--days 365]");
+  console.log("  node scripts/licence-keys.cjs verify PGS2.xxxxx");
   process.exit(1);
 }

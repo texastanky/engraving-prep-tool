@@ -43,3 +43,4 @@ tsconfig.tsbuildinfo
 # Licence signing key - NEVER commit or ship. Losing it orphans every key sold.
 license-private.pem
 license-private*.pem
+license-issued.json
