@@ -12,6 +12,7 @@ node_modules
 /dist
 /dist-ssr
 /desktop-dist
+/desktop-dist-fix
 /desktop-installer
 /desktop-installer-sandbox
 *.local
