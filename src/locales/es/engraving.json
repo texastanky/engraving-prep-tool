@@ -246,7 +246,7 @@
   "panel.keepOut.useTraceHint": "Convierte el trazo cerrado en zona excluida y traza la siguiente abertura.",
   "panel.keepOut.remove": "Quitar zona excluida",
   "panel.keepOut.label": "Zona excluida",
-  "panel.keepOut.dragHint": "Arrastra la etiqueta rosa para moverla, los tiradores para cambiar el tamaño y el control de ángulo para una ranura inclinada. Dentro no se graba nada.",
+  "panel.keepOut.dragHint": "Arrastra la abertura en el lienzo o la etiqueta rosa para moverla, los tiradores para cambiar el tamaño y el control de ángulo para una ranura inclinada. Supr elimina la zona excluida seleccionada. Dentro no se graba nada.",
   "panel.bed.title": "Distribución en la cama",
   "panel.bed.repeat": "Repetir pieza",
   "panel.bed.repeatHint": "Coloca otra copia de la pieza en otra parte de la cama.",

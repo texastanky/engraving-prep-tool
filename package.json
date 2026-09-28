@@ -1,7 +1,7 @@
 {
   "name": "engraving-prep-tool",
   "private": true,
-  "version": "0.1.4",
+  "version": "0.1.5",
   "description": "Design, lay out and export laser marking and engraving work, including FFL/NFA marking blocks.",
   "author": "ForgeMark Industries",
   "type": "module",

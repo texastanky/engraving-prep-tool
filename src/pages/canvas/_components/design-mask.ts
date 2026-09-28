@@ -208,6 +208,55 @@ export function maskCenter(mask: Pick<DesignMask, "x" | "y" | "w" | "h">): { x: 
   return { x: mask.x + mask.w / 2, y: mask.y + mask.h / 2 };
 }
 
+let pointHitContextValue: CanvasRenderingContext2D | null | undefined;
+
+function pointHitContext(): CanvasRenderingContext2D | null {
+  if (pointHitContextValue === undefined) {
+    pointHitContextValue =
+      typeof document === "undefined" ? null : document.createElement("canvas").getContext("2d");
+  }
+  return pointHitContextValue;
+}
+
+/**
+ * Whether a point (canvas pixels) lies inside the shape.
+ *
+ * This is how a keep-out is picked up straight off the workspace — clicking
+ * the opening itself is the natural way to grab it. The point is mapped back
+ * into the shape's own (rotated) frame and tested against the real path; where
+ * no canvas path geometry exists (the unit-test environment) the box itself is
+ * the best answer available.
+ */
+export function maskContainsPoint(mask: DesignMask, x: number, y: number): boolean {
+  if (mask.w <= 0 || mask.h <= 0) return false;
+
+  // The canvas rotates the shape around its centre, so bring the point back
+  // into the shape's frame before comparing it with the box.
+  const cx = mask.x + mask.w / 2;
+  const cy = mask.y + mask.h / 2;
+  const radians = (mask.rotation * Math.PI) / 180;
+  const cos = Math.cos(radians);
+  const sin = Math.sin(radians);
+  const dx = x - cx;
+  const dy = y - cy;
+  const localX = dx * cos + dy * sin + mask.w / 2;
+  const localY = -dx * sin + dy * cos + mask.h / 2;
+  if (localX < 0 || localY < 0 || localX > mask.w || localY > mask.h) return false;
+
+  if (typeof Path2D === "undefined") return true;
+
+  const { path, boxW, boxH, fillRule } = maskPathData(mask);
+  const ctx = pointHitContext();
+  if (!ctx) return true;
+  try {
+    const pointX = (localX / mask.w) * boxW;
+    const pointY = (localY / mask.h) * boxH;
+    return ctx.isPointInPath(new Path2D(path), pointX, pointY, fillRule);
+  } catch {
+    return true;
+  }
+}
+
 /** Largest rect with `aspect` that fits inside `box`, centred. */
 export function fitAspectInside(aspect: number, box: MaskBox): MaskBox {
   const safeAspect = aspect > 0 ? aspect : 1;

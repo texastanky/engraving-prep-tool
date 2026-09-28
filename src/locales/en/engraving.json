@@ -247,7 +247,7 @@
   "panel.keepOut.useTraceHint": "Turn the closed trace into a keep-out, then trace the next opening.",
   "panel.keepOut.remove": "Remove keep-out",
   "panel.keepOut.label": "Keep-out",
-  "panel.keepOut.dragHint": "Drag the pink tag to move it, the handles to resize it, the angle slider for a slanted slot. Nothing inside it gets engraved.",
+  "panel.keepOut.dragHint": "Drag the opening on the canvas or the pink tag to move it, the handles to resize it, and the angle slider for a slanted slot. Delete removes the selected keep-out. Nothing inside it gets engraved.",
   "panel.bed.title": "Bed layout",
   "panel.bed.repeat": "Repeat part",
   "panel.bed.repeatHint": "Place another copy of the part elsewhere on the bed.",

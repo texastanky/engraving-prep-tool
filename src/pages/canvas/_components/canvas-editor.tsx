@@ -97,6 +97,7 @@ import {
   fitMaskToBox,
   getMaskShape,
   createTracedKeepOut,
+  maskContainsPoint,
   maskPathData,
   punchMaskFromCanvas,
   type DesignMask,
@@ -789,6 +790,12 @@ function cloneImageState(state: ImageState): ImageState {
     filters: { ...state.filters },
     warpMesh: cloneWarpMesh(state.warpMesh),
     mask: state.mask ? { ...state.mask } : null,
+    // Keep-outs and bed parts are dragged about on screen like everything
+    // else, so history carries its own copies rather than shared objects.
+    keepOuts: (state.keepOuts ?? []).map((keepOut) => ({ ...keepOut })),
+    partCopies: (state.partCopies ?? []).map((part) =>
+      part.points ? { ...part, points: part.points.map((point) => ({ ...point })) } : { ...part }
+    ),
   };
 }
 
@@ -827,6 +834,29 @@ function imageStateSignature(state: ImageState): string {
           feather: roundHistoryNumber(state.mask.feather),
         }
       : null,
+    keepOuts: (state.keepOuts ?? []).map((keepOut) => ({
+      shapeId: keepOut.shapeId,
+      path: keepOut.path ?? null,
+      x: roundHistoryNumber(keepOut.x),
+      y: roundHistoryNumber(keepOut.y),
+      w: roundHistoryNumber(keepOut.w),
+      h: roundHistoryNumber(keepOut.h),
+      rotation: roundHistoryNumber(keepOut.rotation),
+      cornerRadius: roundHistoryNumber(keepOut.cornerRadius),
+      feather: roundHistoryNumber(keepOut.feather),
+      invert: keepOut.invert,
+      lockAspect: keepOut.lockAspect,
+    })),
+    partCopies: (state.partCopies ?? []).map((part) => ({
+      id: part.id,
+      name: part.name ?? null,
+      dx: roundHistoryNumber(part.dx),
+      dy: roundHistoryNumber(part.dy),
+      closed: part.closed ?? null,
+      points: part.points
+        ? part.points.map((point) => [roundHistoryNumber(point.x), roundHistoryNumber(point.y)])
+        : null,
+    })),
   });
 }
 
@@ -1230,12 +1260,18 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [view]);
   const [panMode, setPanMode] = useState(false);
   const panDragRef = useRef<{ startX: number; startY: number; panX: number; panY: number } | null>(null);
+  // Picking a keep-out up straight off the canvas: click it, drag, release.
+  const keepOutDragRef = useRef<{ index: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const [manualBoxSize, setManualBoxSize] = useState<{ w: number; h: number } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
   // Design real-world size inputs (in current unit)
   const [designWidthInput, setDesignWidthInput] = useState("");
   const [designHeightInput, setDesignHeightInput] = useState("");
+
+  // The keep-out picked in the panel or on the canvas. Declared with the other
+  // editor state so the canvas, keyboard and panel handlers can all see it.
+  const [selectedKeepOut, setSelectedKeepOut] = useState<number | null>(null);
 
   // Undo/redo history
   /** Mirrors the pen trace so a snapshot never records a half-flushed render. */
@@ -2609,6 +2645,18 @@ const handlePenTracePointMouseDown = useCallback(
     ctx.fill();
   }, [design, eraserSize]);
 
+  /** The keep-out under a point on the canvas, topmost first. */
+  const hitKeepOut = useCallback(
+    (point: Pt): number | null => {
+      const list = design?.keepOuts ?? [];
+      for (let index = list.length - 1; index >= 0; index -= 1) {
+        if (maskContainsPoint(list[index], point.x, point.y)) return index;
+      }
+      return null;
+    },
+    [design]
+  );
+
   const handleMouseDown = useCallback(
     (e: React.MouseEvent) => {
       // Panning moves the view, never the artwork. Middle-drag always works; the
@@ -2668,8 +2716,31 @@ const handlePenTracePointMouseDown = useCallback(
       }
 
       if (!design) return;
-      e.preventDefault();
       const pos = getPos(e.clientX, e.clientY);
+
+      // A click on a keep-out picks it up — selected and dragged in one
+      // gesture, so an opening can be fitted to the part without hunting
+      // through the list first. A click anywhere else sets it back down.
+      if (!warpMode && !vectorNodeMode && !eraserActive) {
+        const keepOutIndex = hitKeepOut(pos);
+        if (keepOutIndex !== null) {
+          const keepOut = (design.keepOuts ?? [])[keepOutIndex];
+          e.preventDefault();
+          setSelectedVectorId(null);
+          setSelectedKeepOut(keepOutIndex);
+          keepOutDragRef.current = {
+            index: keepOutIndex,
+            startX: pos.x,
+            startY: pos.y,
+            originX: keepOut.x,
+            originY: keepOut.y,
+          };
+          return;
+        }
+        if (selectedKeepOut !== null) setSelectedKeepOut(null);
+      }
+
+      e.preventDefault();
       if (eraserActive) {
         isErasingRef.current = true;
         const imgPos = getEraserPosInDesign(pos.x, pos.y);
@@ -2683,6 +2754,7 @@ const handlePenTracePointMouseDown = useCallback(
       addPenTracePoint, design, eraserActive, getPos, getEraserPosInDesign,
       applyEraserStroke, draw, penTraceActive, vectorTool, vectorDraft,
       vectorObjects, finishVectorDraft, setSelectedVectorId, panMode, view, screenTolerance,
+      hitKeepOut, warpMode, vectorNodeMode, selectedKeepOut,
     ]
   );
 
@@ -2741,6 +2813,28 @@ const handlePenTracePointMouseDown = useCallback(
         return;
       }
 
+      const keepOutDrag = keepOutDragRef.current;
+      if (keepOutDrag) {
+        const point = getPos(e.clientX, e.clientY);
+        updateDesignContinuously((current) => {
+          const list = current.keepOuts ?? [];
+          if (!list[keepOutDrag.index]) return current;
+          return {
+            ...current,
+            keepOuts: list.map((shape, index) =>
+              index === keepOutDrag.index
+                ? {
+                    ...shape,
+                    x: keepOutDrag.originX + (point.x - keepOutDrag.startX),
+                    y: keepOutDrag.originY + (point.y - keepOutDrag.startY),
+                  }
+                : shape
+            ),
+          };
+        });
+        return;
+      }
+
       if (!design) return;
       const pos = getPos(e.clientX, e.clientY);
       if (eraserActive) {
@@ -2762,6 +2856,10 @@ const handlePenTracePointMouseDown = useCallback(
 
   const handleMouseUp = useCallback(() => {
     panDragRef.current = null;
+    if (keepOutDragRef.current) {
+      keepOutDragRef.current = null;
+      commitCurrentDesign();
+    }
     if (isDragging) commitCurrentDesign();
     isErasingRef.current = false;
     setIsDragging(false);
@@ -2901,10 +2999,23 @@ const handlePenTracePointMouseDown = useCallback(
           setSelectedNode(null);
         } else {
           setSelectedVectorId(null);
+          setSelectedKeepOut(null);
         }
         return;
       }
       if (e.key === "Backspace" || e.key === "Delete") {
+        // A keep-out picked by hand is the strongest signal of what Delete
+        // should take out, before anything else that may be selected.
+        if (selectedKeepOut !== null && design?.keepOuts?.[selectedKeepOut]) {
+          e.preventDefault();
+          const index = selectedKeepOut;
+          commitDesignUpdate((prev) => ({
+            ...prev,
+            keepOuts: (prev.keepOuts ?? []).filter((_, i) => i !== index),
+          }));
+          setSelectedKeepOut(null);
+          return;
+        }
         // In node mode the delete applies to the selected node.
         if (vectorNodeMode && selectedNode) {
           e.preventDefault();
@@ -2941,6 +3052,7 @@ const handlePenTracePointMouseDown = useCallback(
     design, handleUndo, handleRedo, penTraceActive, penTracePoints.length,
     vectorTool, vectorDraft.length, selectedVectorId, finishVectorDraft, deleteVectorObject,
     vectorNodeMode, selectedNode, deleteSelectedNode, setSelectedVectorId,
+    selectedKeepOut, commitDesignUpdate, setSelectedKeepOut,
   ]);
 
   // Quick actions
@@ -3888,7 +4000,6 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
   }, [commitDesignUpdate]);
   
   // --- Keep-outs: the openings the laser must not mark ---
-  const [selectedKeepOut, setSelectedKeepOut] = useState<number | null>(null);
   const keepOuts = design?.keepOuts ?? [];
   
   const updateKeepOutContinuously = useCallback(

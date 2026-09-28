@@ -10,6 +10,7 @@ import {
   fitAspectInside,
   fitMaskToBox,
   getMaskShape,
+  maskContainsPoint,
   maskPathData,
   polygonPath,
   punchMaskFromCanvas,
@@ -372,5 +373,47 @@ describe("createTracedKeepOut", () => {
     expect(data.path).toBe(keepOut!.path);
     expect(data.boxW).toBe(60);
     expect(data.boxH).toBe(50);
+  });
+});
+
+describe("maskContainsPoint", () => {
+  // jsdom has no canvas path geometry, so these exercise the box test (and
+  // its rotation maths) — the exact path test runs in the browser.
+  const outline = [
+    { x: 100, y: 200 },
+    { x: 180, y: 200 },
+    { x: 180, y: 240 },
+    { x: 100, y: 240 },
+  ];
+
+  it("accepts points inside the box and rejects points outside it", () => {
+    const keepOut = createTracedKeepOut(outline)!;
+    expect(maskContainsPoint(keepOut, 140, 220)).toBe(true);
+    expect(maskContainsPoint(keepOut, 40, 220)).toBe(false);
+    expect(maskContainsPoint(keepOut, 140, 280)).toBe(false);
+  });
+
+  it("maps the point through the shape's rotation", () => {
+    const keepOut = createTracedKeepOut(outline)!;
+    const turned = { ...keepOut, rotation: 90 };
+
+    // (175, 220) sits inside the upright box but outside it once the box has
+    // been turned a quarter turn around its centre.
+    expect(maskContainsPoint(keepOut, 175, 220)).toBe(true);
+    expect(maskContainsPoint(turned, 175, 220)).toBe(false);
+
+    // A point above the centre only lands inside after that same turn.
+    expect(maskContainsPoint(keepOut, 140, 185)).toBe(false);
+    expect(maskContainsPoint(turned, 140, 185)).toBe(true);
+  });
+
+  it("treats a degenerate shape as empty", () => {
+    expect(
+      maskContainsPoint(
+        { ...createTracedKeepOut(outline)!, w: 0 },
+        100,
+        200
+      )
+    ).toBe(false);
   });
 });
