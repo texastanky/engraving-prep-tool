@@ -5,6 +5,7 @@ import { Badge } from "@/components/ui/badge.tsx";
 import { ScrollArea } from "@/components/ui/scroll-area.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
+import { licenseKeyHeader } from "@/lib/licensing.ts";
 import { cn } from "@/lib/utils.ts";
 import { engravingT, type EngravingLocale } from "./engraving-copy.ts";
 
@@ -226,7 +227,7 @@ export default function CanvasAssistant({
 
         const response = await fetch("/api/assistant", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
+          headers: { "Content-Type": "application/json", ...licenseKeyHeader() },
           body: JSON.stringify({
             messages: compactMessages(nextMessages),
             context,

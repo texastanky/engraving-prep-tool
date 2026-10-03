@@ -1,5 +1,4 @@
 const { app, BrowserWindow, shell } = require("electron");
-const crypto = require("node:crypto");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const http = require("node:http");
@@ -23,9 +22,10 @@ const mimeTypes = {
 };
 
 /**
- * In development only, pick up .env.local the way the dev server does, so the
- * owner account, licence secret and API keys set there apply to the desktop app
- * too. Skipped entirely in a packaged build, so nothing sensitive ships.
+ * Pick up development settings before the local server starts. In development
+ * only, .env.local is read the way the dev server reads it (API keys for the AI
+ * features, and any other local settings). Skipped in a packaged build, so
+ * nothing sensitive ships.
  */
 function loadLocalEnvFile() {
   if (app.isPackaged) return;
@@ -48,34 +48,14 @@ function loadLocalEnvFile() {
   }
 }
 
-async function ensureDesktopAuthEnv() {
+async function ensureDesktopEnv() {
   loadLocalEnvFile();
 
   const userData = app.getPath("userData");
   await fsp.mkdir(userData, { recursive: true });
 
-  if (!process.env.AUTH_USER_FILE) {
-    process.env.AUTH_USER_FILE = path.join(userData, "auth-users.json");
-  }
-
   if (!process.env.PRESET_STORE_FILE) {
     process.env.PRESET_STORE_FILE = path.join(userData, "parts-presets.json");
-  }
-
-  if (!process.env.AUTH_COOKIE_SECURE) {
-    process.env.AUTH_COOKIE_SECURE = "false";
-  }
-
-  if (!process.env.AUTH_SESSION_SECRET) {
-    const secretPath = path.join(userData, "session-secret.txt");
-    try {
-      process.env.AUTH_SESSION_SECRET = (await fsp.readFile(secretPath, "utf8")).trim();
-    } catch (error) {
-      if (error?.code !== "ENOENT") throw error;
-      const secret = crypto.randomBytes(48).toString("base64url");
-      await fsp.writeFile(secretPath, secret, { mode: 0o600 });
-      process.env.AUTH_SESSION_SECRET = secret;
-    }
   }
 }
 
@@ -156,14 +136,15 @@ function serveStatic(req, res) {
 }
 
 async function startBundledServer() {
-  await ensureDesktopAuthEnv();
+  await ensureDesktopEnv();
 
   // Keep this in step with the localApiPlugin routes in vite.config.ts: anything
   // missing here silently falls through to the static handler in the packaged
   // app, which looks like the feature doing nothing.
+  //
+  // There is no /api/auth or /api/license: the licence key gates the app and is
+  // verified on this machine, so no account or licence server is involved.
   const routes = new Map([
-    ["/api/auth", "auth.js"],
-    ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
     ["/api/presets", "presets.js"],

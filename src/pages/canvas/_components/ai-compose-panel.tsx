@@ -12,6 +12,7 @@ import {
 } from "@/components/ui/select.tsx";
 import { Textarea } from "@/components/ui/textarea.tsx";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip.tsx";
+import { licenseKeyHeader } from "@/lib/licensing.ts";
 import { cn } from "@/lib/utils.ts";
 import { engravingT, type EngravingLocale } from "./engraving-copy.ts";
 
@@ -246,7 +247,7 @@ export default function AiComposePanel({ currentDesignSrc, locale, onApply }: Ai
     try {
       const response = await fetch("/api/ai-compose", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: { "Content-Type": "application/json", ...licenseKeyHeader() },
         body: JSON.stringify({
           prompt,
           size,

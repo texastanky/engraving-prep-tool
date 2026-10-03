@@ -94,6 +94,33 @@ function staticAdminUser() {
   };
 }
 
+/**
+ * True when the account gate is switched off for local or single-user
+ * (desktop) use: no one has to sign in, and everyone counts as the owner.
+ * Unset AUTH_DISABLED (or set it to "false") to require sign-in again.
+ */
+export function isAuthDisabled() {
+  return process.env.AUTH_DISABLED === "true";
+}
+
+/**
+ * The identity requests act as while the gate is off. Prefer the static owner
+ * account so licence, plan and usage counters stay attached to the same user
+ * the owner would sign in as; otherwise keep one stable local identity so
+ * counters accumulate under a single key instead of resetting per request.
+ */
+function disabledAuthUser() {
+  const adminUser = staticAdminUser();
+  if (adminUser) return publicUser(adminUser);
+
+  return {
+    id: "local-user",
+    email: "local@this-device",
+    name: "Local user",
+    createdAt: null,
+  };
+}
+
 async function readUsers() {
   try {
     const raw = await fs.readFile(USER_FILE, "utf8");
@@ -254,6 +281,8 @@ export async function loginAccount({ email, password }) {
 export function requireAuth(req, res) {
   const user = getSessionUser(req);
   if (user) return user;
+
+  if (isAuthDisabled()) return disabledAuthUser();
 
   res.status(401).json({ error: "unauthorized" });
   return null;

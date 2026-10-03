@@ -151,20 +151,14 @@ export default function Landing() {
 
       <section id="pricing" className="mx-auto max-w-6xl px-4 py-12">
         <h2 className="font-serif text-2xl font-bold">Pricing</h2>
-        <div className="mt-6 grid gap-4 sm:grid-cols-2">
-          <div className="rounded-lg border border-border bg-card p-5">
-            <h3 className="text-sm font-semibold">Free</h3>
-            <p className="mt-1 font-serif text-3xl font-bold">$0</p>
-            <p className="mt-2 text-xs text-muted-foreground">
-              Full design toolset with a monthly export allowance and a daily limit on AI features. No
-              payment details required.
-            </p>
-          </div>
+        <div className="mt-6 max-w-md">
           <div className="rounded-lg border border-primary/40 bg-card p-5">
             <h3 className="text-sm font-semibold">Licensed</h3>
             <p className="mt-1 font-serif text-3xl font-bold">Contact us</p>
             <p className="mt-2 text-xs text-muted-foreground">
-              Unlimited exports, higher AI limits, and offline use. Email{" "}
+              A licence key unlocks the app on your machine: the full toolset, unlimited exports,
+              and offline use — no account and no internet connection once the key is entered.
+              Email{" "}
               <a className="text-primary hover:underline" href="mailto:support@forgemarkindustries.com">
                 support@forgemarkindustries.com
               </a>{" "}

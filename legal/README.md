@@ -5,6 +5,12 @@
 > that a licensed attorney can review and finish them quickly. Have counsel
 > review them before you publish or rely on them. Legal requirements vary by
 > jurisdiction and change over time.
+>
+> **Status note (2026-10-03):** the account system has been removed from the
+> product — the licence key now gates the app, it is verified offline, and the
+> usage counters no longer exist. Parts of `EULA.md`, `PRIVACY.md` and
+> `REFUNDS-AND-SUPPORT.md` still describe accounts, quotas and a licence server;
+> update them during the counsel review before publishing.
 
 ## What is in here
 

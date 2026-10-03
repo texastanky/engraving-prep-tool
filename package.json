@@ -92,6 +92,8 @@
       "dist/**/*",
       "server/**/*",
       "package.json",
+      "!api/auth.js",
+      "!server/auth.js",
       "!node_modules/**/*"
     ],
     "win": {

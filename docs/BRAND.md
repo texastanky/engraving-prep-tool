@@ -150,12 +150,14 @@ processor review. That page was removed here because the gun shop site in
 | --- | --- |
 | `/` | Public product page (ForgeMark Industries) |
 | `/terms`, `/privacy`, `/refunds` | Public static pages, generated from `legal/*.md` |
-| `/canvas` | Requires an account (`AccountGate`) |
+| `/canvas` | Requires a licence key (checked in the app, offline) |
 
-All routes used to sit behind the account gate, which meant the software had no
-public page at all. The gate now wraps only the editor routes, so the product
-page and the legal pages are reachable by anyone — required for underwriting and
-for customers deciding whether to buy.
+The editor used to sit behind an account gate, which meant a paying customer had
+to create an account before they could use the thing they bought. The gate is
+now the licence key: the customer pastes the key they received, it is verified on
+their machine against the public key shipped with the app, and no server or
+account is involved. The product page and the legal pages remain public —
+required for underwriting and for customers deciding whether to buy.
 
 ### Setting up forgemarkindustries.com
 

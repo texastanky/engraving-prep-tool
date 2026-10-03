@@ -4,6 +4,38 @@ Written 2026-09-22. Three jobs, in the order they should actually be done.
 
 ---
 
+## 0. Stop asking for a password on every launch ← do this first
+
+**Symptom:** the app asks you to sign in *every* time it opens, which it shouldn't.
+
+**Cause:** the desktop app starts its local server on a **random port** (`server.listen(0, ...)`).
+Cookies are scoped to the origin, and for a local server the port *is* part of the origin — so every
+launch is a new origin, the saved session never matches, and sign-in is forced again. The account
+gate is deliberate; the repetition is the defect.
+
+**Two fixes:**
+
+| | Change | Effect |
+|---|---|---|
+| **A** | Listen on a **fixed port**, falling back to a random one if it's taken | Sign in once per install; session persists |
+| **B** | **Remove the account gate from the desktop build** — the licence key becomes the gate | No sign-in at all |
+
+**Do B.** A only treats the symptom. B removes the server dependency, the `.data` store file, and
+the locally-forgeable plan — and it fixes the customer's first experience: *paste the key you bought*,
+not *create an account before you can use the thing you paid for*.
+
+Touches: `desktop/main.cjs`, `src/components/account-gate.tsx`, `server/auth.js`, `api/license.js`.
+Keeping the account path for a local/dev build is fine; the point is not to ship it.
+
+**Done (2026-10-03).** B is implemented. The account gate is gone from the client; the app opens
+only for a valid PGS2 key, verified offline against the public key shipped in the build. `/api/auth`
+and `/api/license` are no longer served by the desktop app, the `.data` licence store is gone, and
+the account module (`server/auth.js`, `api/auth.js`) is retained for a local/dev build but excluded
+from the installer. The AI endpoints now take the licence key (`x-licence-key`) instead of a session
+cookie; hosted AI metering is deferred until those features open to buyers (see OPERATIONS).
+
+---
+
 ## 1. The simple masking tool ← the priority
 
 The ask: **mask a design onto the part or template, with none of the Adobe/Corel complexity.**
@@ -70,7 +102,7 @@ affects — not buried in a menu.
 
 ## 2. Licensing — what I recommended
 
-Today the app runs its own API locally, so "server-side truth" lives on the **customer's machine**.
+The app used to run its own API locally, so "server-side truth" lived on the **customer's machine**.
 Anyone can open `.data\licensing.json` in the install folder and set `"plan": "shop"`. And the keys
 are HMAC-signed, which is symmetric — a shipped build cannot verify one without carrying the secret.
 
@@ -99,14 +131,14 @@ verifies with a public key that is safe to ship. A key then cannot be forged or 
 **This is additive** — it adds a second verification path and leaves the existing one alone, so it
 cannot break the running app.
 
-### Still needs your decision
+### Decided — accounts dropped
 
-**Do buyers need accounts at all?** Registration is currently disabled and the only account comes
-from your `AUTH_ADMIN_*` environment variables, so a paying customer has **no path to a working app**.
+**Do buyers need accounts at all?** Registration was disabled and the only account came from your
+`AUTH_ADMIN_*` environment variables, so a paying customer had **no path to a working app**.
 
-My recommendation: **drop accounts entirely for the retail product.** For a desktop tool the licence
-key *is* the account. That deletes the server, the store file, and the whole locally-forgeable
-problem. Keep the account path for your own build if you like; don't ship it.
+**Decided (2026-10-03): accounts are dropped.** For a desktop tool the licence key *is* the account
+— implemented with section 0. The server dependency, the store file and the locally-forgeable plan
+are gone; the account path is kept for a local/dev build only, and is not shipped.
 
 ---
 

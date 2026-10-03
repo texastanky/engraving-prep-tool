@@ -1,6 +1,7 @@
 import {
   clearSessionCookie,
   getSessionUser,
+  isAuthDisabled,
   loginAccount,
   registerAccount,
   setSessionCookie,
@@ -33,7 +34,7 @@ export default async function handler(req, res) {
 
   if (req.method === "GET") {
     const user = getSessionUser(req);
-    res.status(200).json({ authenticated: Boolean(user), user });
+    res.status(200).json({ authenticated: Boolean(user), user, disabled: isAuthDisabled() });
     return;
   }
 

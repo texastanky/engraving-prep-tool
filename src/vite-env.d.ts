@@ -10,3 +10,4 @@ interface ImportMeta {
 
 declare const __APP_UPDATE_MANIFEST_URL__: string | undefined;
 declare const __APP_VERSION__: string | undefined;
+declare const __LICENCE_PUBLIC_KEY__: string;

@@ -92,9 +92,10 @@ function adaptResponse(res: ServerResponse): LocalApiResponse {
 }
 
 function localApiPlugin(): Plugin {
+  // Keep these in step with the route map in desktop/main.cjs. There is no
+  // /api/auth or /api/license: the licence key gates the app and is verified on
+  // this machine, so no account or licence server is involved.
   const routes = new Map([
-    ["/api/auth", "auth.js"],
-    ["/api/license", "license.js"],
     ["/api/assistant", "assistant.js"],
     ["/api/ai-compose", "ai-compose.js"],
     ["/api/presets", "presets.js"],
@@ -132,6 +133,13 @@ const packageJson = JSON.parse(
   fs.readFileSync(path.resolve(__dirname, "package.json"), "utf8"),
 ) as { version?: string };
 
+// Injected into the client so the app can verify PGS2 licence keys offline.
+// The same file is read at runtime by server/licensing.js.
+const licencePublicKey = fs.readFileSync(
+  path.resolve(__dirname, "server/license-public.pem"),
+  "utf8",
+);
+
 const appVersion = packageJson.version ?? "0.0.0";
 const updateManifestUrl =
   process.env.VITE_UPDATE_MANIFEST_URL?.trim() || "https://forgemarkindustries.com/update.json";
@@ -142,6 +150,7 @@ export default defineConfig({
   define: {
     __APP_UPDATE_MANIFEST_URL__: JSON.stringify(updateManifestUrl),
     __APP_VERSION__: JSON.stringify(appVersion),
+    __LICENCE_PUBLIC_KEY__: JSON.stringify(licencePublicKey),
   },
   server: {
     host: "0.0.0.0",

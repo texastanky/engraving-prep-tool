@@ -1,6 +1,9 @@
 import { describe, expect, it } from "vitest";
 import crypto from "node:crypto";
+import { readFileSync } from "node:fs";
+import path from "node:path";
 import { verifyLicenseKey, type LicenseVerifyResult } from "../../server/licensing.js";
+import { LICENCE_PUBLIC_KEY_PEM } from "./licence-public-key.ts";
 
 /**
  * Asymmetric (PGS2) licence keys.
@@ -98,5 +101,30 @@ describe("PGS2 asymmetric licence keys", () => {
       publicKey: PUBLIC_PEM,
     });
     expect(reasonOf(result)).toBe("unknown_plan");
+  });
+});
+
+describe("the bundled public key", () => {
+  it("ships a usable Ed25519 key (the ?raw import in the client works)", () => {
+    expect(LICENCE_PUBLIC_KEY_PEM).toContain("BEGIN PUBLIC KEY");
+
+    const der = Buffer.from(
+      LICENCE_PUBLIC_KEY_PEM.replace(/-----[^-]+-----/g, "").replace(/\s+/g, ""),
+      "base64"
+    );
+    const key = crypto.createPublicKey({ key: der, format: "der", type: "spki" });
+    expect(key.asymmetricKeyType).toBe("ed25519");
+  });
+
+  it("is the same PEM the server verifies against", () => {
+    // The server reads this file at runtime; the client gets it injected at
+    // build time. Both must be the same key.
+    // Vitest serves modules over http, so resolve from the project root
+    // rather than import.meta.url.
+    const fromDisk = readFileSync(
+      path.resolve(process.cwd(), "server", "license-public.pem"),
+      "utf8"
+    );
+    expect(LICENCE_PUBLIC_KEY_PEM.trim()).toBe(fromDisk.trim());
   });
 });

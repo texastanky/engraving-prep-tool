@@ -1,5 +1,5 @@
 import { BrowserRouter, HashRouter, Route, Routes } from "react-router-dom";
-import { AccountGate } from "./components/account-gate.tsx";
+import { LicenceGate } from "./components/licence-gate.tsx";
 import { DefaultProviders } from "./components/providers/default.tsx";
 import Landing from "./pages/Landing.tsx";
 import CanvasPage from "./pages/canvas/page.tsx";
@@ -16,21 +16,21 @@ export default function App() {
           {/* Public: the product page and anything that does not touch customer data. */}
           <Route path="/" element={<Landing />} />
 
-          {/* The editor needs an account, so only these routes sit behind the gate. */}
+          {/* The editor needs a valid licence key — there are no accounts. */}
           <Route
             path="/canvas"
             element={
-              <AccountGate>
+              <LicenceGate>
                 <CanvasPage />
-              </AccountGate>
+              </LicenceGate>
             }
           />
           <Route
             path="/:locale/canvas"
             element={
-              <AccountGate>
+              <LicenceGate>
                 <CanvasPage />
-              </AccountGate>
+              </LicenceGate>
             }
           />
 

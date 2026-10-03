@@ -1,5 +1,15 @@
-import { requireAuth } from "../server/auth.js";
-import { consumeAiCall, getAccountPlan } from "../server/licensing.js";
+import { verifyLicenseKey } from "../server/licensing.js";
+
+/**
+ * The caller's licence, which is the whole account system now: a valid PGS2
+ * key proves the plan, with no session cookies or account store involved.
+ */
+function licenceFromRequest(req) {
+  const header = req.headers?.["x-licence-key"];
+  const key = Array.isArray(header) ? header[0] : header;
+  const result = verifyLicenseKey(key, {});
+  return result.ok ? { sub: result.sub, plan: result.plan } : null;
+}
 
 const MAX_REQUEST_CHARS = 11_000_000;
 const MAX_IMAGE_DATA_URL_CHARS = 4_000_000;
@@ -171,8 +181,11 @@ export default async function handler(req, res) {
     return;
   }
 
-  const user = requireAuth(req, res);
-  if (!user) return;
+  const licence = licenceFromRequest(req);
+  if (!licence) {
+    res.status(401).json({ error: "licence_required" });
+    return;
+  }
 
   const body = readBody(req);
   const messages = normalizeMessages(body.messages);
@@ -197,15 +210,8 @@ export default async function handler(req, res) {
     return;
   }
 
-  // Per-user quota. The provider key is ours, so every request is counted before
-  // it is spent; a denied request does not consume quota. The plan comes from the
-  // account, not from the client.
-  const plan = await getAccountPlan(user.id);
-  const quota = await consumeAiCall({ userId: user.id, plan });
-  if (!quota.allowed) {
-    res.status(429).json({ error: "quota_exceeded", limit: quota.limit, remaining: 0 });
-    return;
-  }
+  // A valid licence key is the only gate here. When the AI features open up to
+  // buyers, re-add per-licence metering (keyed by licence.sub) at this point.
 
   const messagesWithImages = buildMessagesWithImages(messages, designImageDataUrl, partPhotoDataUrl);
   const hasDesignImage = Boolean(designImageDataUrl);

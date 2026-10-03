@@ -1,25 +1,29 @@
-# Operations: licensing, quotas and shop setup
+# Operations: licensing and shop setup
 
 This covers what a shop owner or the person running your servers needs. It is not
 legal advice, and nothing here determines whether a marking is compliant.
 
 ## Environment variables
 
-| Variable                                   | Purpose                                                    | Required                         |
-| ------------------------------------------ | ---------------------------------------------------------- | -------------------------------- |
-| `AUTH_SESSION_SECRET`                      | Signs login sessions                                       | Recommended in production        |
-| `AUTH_ADMIN_EMAIL` / `AUTH_ADMIN_PASSWORD` | Static owner account, no registration needed               | Optional                         |
-| `AUTH_DISABLE_REGISTRATION`                | Set to `true` to stop strangers creating accounts          | Recommended once customers exist |
-| `AUTH_SIGNUP_CODE`                         | Required code for registration                             | Optional                         |
-| `LICENSE_SECRET`                           | Signs offline entitlement tokens; legacy PGS1 dev keys      | Recommended when selling         |
-| `LICENSE_STORE_FILE`                       | Where usage counters live (default `.data/licensing.json`) | Optional                         |
-| `OPENAI_API_KEY`                           | Server-side key for the AI features                        | Optional                         |
+| Variable                  | Purpose                                                             | Required |
+| ------------------------- | ------------------------------------------------------------------- | -------- |
+| `OPENAI_API_KEY`          | Server-side key for the AI features                                 | Optional |
+| `LICENSE_SECRET`          | Verifies legacy `PGS1` development keys only; customer keys are `PGS2` | Optional |
+| `LICENSE_PUBLIC_KEY_FILE` | Overrides where the app finds `license-public.pem`                  | Optional |
 
-If `LICENSE_SECRET` is unset, offline entitlement tokens cannot be issued and
-legacy PGS1 keys can never verify — but PGS2 customer keys are unaffected,
-because they verify against the public key that ships with the app. With no
-public key and no secret, the app falls back to the free tier rather than
-failing open.
+The shipped app needs no account and no licence server: a customer's key is
+verified on their own machine (Ed25519, against `server/license-public.pem`),
+the editor opens without a sign-in, and everything keeps working offline.
+
+The account module (`server/auth.js`, `api/auth.js`) is retained for a local or
+internal build, but it is no longer served by the desktop app, is not called by
+the client, and is excluded from the installer. `AUTH_*` variables have no
+effect on the shipped product.
+
+If `LICENSE_SECRET` is unset, legacy PGS1 keys can never verify — but PGS2
+customer keys are unaffected, because they verify against the public key that
+ships with the app. With no public key, the app reports
+`licensing_not_configured` rather than failing open.
 
 ## Selling licence keys
 
@@ -48,8 +52,9 @@ node scripts/licence-keys.cjs issue --sub customer@example.com --plan shop --day
 
 - `--plan` is `pro` or `shop`.
 - `--days` sets a subscription term; leave it off for a perpetual licence.
-- Send the printed `PGS2...` line to the customer; they paste it into the app's
-  **Licence** card.
+- Send the printed `PGS2...` line to the customer; they paste it into the
+  **Licence** field the app shows on first run (the same field lives in the
+  editor's Licence card).
 - Every issued key is appended to `license-issued.json` beside the private key
   (gitignored) — your sales ledger, so a "what did I buy?" email can be answered
   in seconds.
@@ -69,56 +74,48 @@ reports their key will not accept.
 1. `verify` the key from your side.
 2. If it verifies for you but not on their machine, check the build shipped
    `server/license-public.pem` — without it the app reports
-   `licensing_not_configured` and stays on the free tier.
+   `licensing_not_configured` and stays locked.
 3. For an expired subscription, issue a fresh key and send it with a short
    note.
 
-## Plans and limits
+## Plans and terms
 
-| Plan | Exports per month | AI calls per day |
-| ---- | ----------------- | ---------------- |
-| free | 5                 | 5                |
-| pro  | unlimited         | 200              |
-| shop | unlimited         | 1000             |
+| Plan | Exports   | AI features                |
+| ---- | --------- | -------------------------- |
+| pro  | unlimited | Allowed with a valid key   |
+| shop | unlimited | Allowed with a valid key   |
 
-Change these in `PLANS` in `server/licensing.js`. They are the single source of
-truth for both the server checks and the numbers shown in the app.
+The plan travels inside the signed key (`scripts/licence-keys.cjs issue
+--plan pro|shop`, optionally `--days`). Nothing on the customer's machine stores
+or counts usage any more: the monthly export counter and the daily AI meter were
+removed with the account system, because a key-gated paid app does not need
+them. If the hosted AI features open up to buyers, re-add metering on the server
+side, keyed by the licence subject (`sub`).
 
 ## What is actually enforced, and where
 
-| Check            | Enforced by                         | Honest assessment                                                           |
-| ---------------- | ----------------------------------- | --------------------------------------------------------------------------- |
-| AI call quota    | Server, before the provider call    | Genuinely enforced: the provider key is server-side                         |
-| Licence validity | Server, Ed25519 signature checked against the shipped public key | Genuinely enforced: a key cannot be forged, edited, or extended |
-| Export allowance | Server counter, asked by the client | A speed bump. Exports run locally, so a patched client can skip the request |
+| Check            | Enforced by                                                          | Honest assessment                                               |
+| ---------------- | -------------------------------------------------------------------- | --------------------------------------------------------------- |
+| Licence validity | The app, offline: Ed25519 against the shipped public key             | Genuinely enforced: a key cannot be forged, edited or extended  |
+| Editor access    | The gate — a valid key must be pasted before the app opens           | A patched client can skip it, as with any local app             |
+| AI access        | Server, before the provider call: the request must carry a valid key | The provider key is ours; no valid key, no call                 |
 
-Because of that last row, do not treat export counting as copy protection. The
-durable protections are licence validity and the fact that the AI features need
-your server. Anything else can be worked around by someone determined enough to
-patch a local app.
+A local app can always be patched, so treat the gate as copy protection for
+honest installs. The durable protection is that keys cannot be minted: only the
+private key (never shipped) can sign one.
 
-## Usage counters
+## No local store
 
-Counters live in `LICENSE_STORE_FILE` as:
-
-```json
-{
-  "users": {
-    "<user id>": { "exports": { "2026-09": 5 }, "ai": { "2026-09-14": 12 } }
-  }
-}
-```
-
-Exports are counted per calendar month and AI calls per day, both UTC. A denied
-request does not consume quota. Deleting the file resets all counters — it is a
-plain file, so back it up alongside the account store if you care about it.
+There is no `.data/licensing.json` any more. The plan and expiry are covered by
+the signature that ships inside the key, so the old forgery trick — editing
+`"plan": "shop"` in a local file — no longer has a file to edit.
 
 ## Shop setup in the app
 
 The FFL/NFA marking tool reads licensed details from a shop profile, stored
 locally (`pgs-shop-profile-v1`). On first run the app asks for the licensed name,
 city, state and the default character height, and then fills those into every
-marking block. If accounts move server-side, this is the object to sync.
+marking block. There is no account to sync it with — it stays on the machine.
 
 Presets ship with no shop-specific text on purpose, so the app is not
 personalised to one business.
@@ -129,12 +126,9 @@ personalised to one business.
   buyers see an "unknown publisher" warning. Needs an OV or EV certificate.
 - **EULA, privacy policy, refund and support terms.** Required for selling, and
   worth having a lawyer review given the compliance-adjacent nature.
-- **Registration policy.** Set `AUTH_DISABLE_REGISTRATION=true` once you have
-  customers, or strangers can create accounts and spend your AI budget.
-- **Accounts.** `server/auth.js` writes to a local JSON file. That works for a
-  single shop; a customer base needs a real backend with password reset.
-- **Refill the licence store.** Consider whether monthly counters should reset
-  on a billing anniversary rather than the calendar month.
+- **AI metering, before hosted AI opens to buyers.** The daily counters went
+  with the account system; re-add server-side metering keyed by the licence
+  subject (`sub`) so a leaked key cannot spend your OpenAI budget unchecked.
 - **Export control.** Software aimed at firearms marking may raise ITAR/EAR
   questions if sold outside the US. Worth a lawyer's read before shipping
   internationally.

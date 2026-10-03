@@ -137,13 +137,11 @@ import {
   activateLicense,
   denialMessage,
   entitlementLabel,
-  fetchLicenseStatus,
+  exportPermission,
   isEntitlementValid,
+  licenseErrorMessage,
   loadEntitlement,
-  requestExportPermission,
-  requestRenewalChange,
   type Entitlement,
-  type LicenseStatus,
 } from "@/lib/licensing.ts";
 import {
   booleanSubpaths,
@@ -655,20 +653,6 @@ function defaultReferenceRailOpen(): boolean {
   return typeof window === "undefined" ? false : window.innerWidth >= 1180;
 }
 
-/**
- * Labels for the account plan.
- *
- * The licence card uses these from the *server* status rather than the cached
- * local entitlement: an account can be licensed server-side while this client
- * holds no key (no key was ever typed in here), and reading the cached token
- * alone labelled a paid account "Free plan" while showing its paid quotas.
- */
-const ACCOUNT_PLAN_LABELS: Record<string, string> = {
-  free: "Free plan",
-  pro: "Pro plan",
-  shop: "Shop plan",
-};
-
 const RULER_THICKNESS = 20;
 const MIN_CANVAS_SIZE = 80;
 const CANVAS_MARGIN = 8;
@@ -1164,13 +1148,10 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [onboarding, setOnboarding] = useState<OnboardingState>(() => loadOnboardingState());
   const [guideOpen, setGuideOpen] = useState(() => !loadOnboardingState().dismissed);
 
-  /** Licence state, so exports can ask permission before running. */
+  /** Licence state: the key is verified at the gate; exports re-check its term. */
   const [entitlement, setEntitlement] = useState<Entitlement | null>(() => loadEntitlement());
   const [licenseKeyInput, setLicenseKeyInput] = useState("");
   const [licenseBusy, setLicenseBusy] = useState(false);
-  const [licenseStatus, setLicenseStatus] = useState<LicenseStatus | null>(null);
-  const [renewalBusy, setRenewalBusy] = useState(false);
-  const [confirmingCancel, setConfirmingCancel] = useState(false);
 
   /** Primary selection, used by node editing and the scale handles. */
   const selectedVectorId =
@@ -3631,45 +3612,6 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
     }, 50);
   }, [design, cornerRadius, loadDesign, t]);
 
-  // Keep the card honest about allowances and renewal state by asking the server.
-  useEffect(() => {
-    let active = true;
-    void fetchLicenseStatus(entitlement).then((status) => {
-      if (active) setLicenseStatus(status);
-    });
-    return () => {
-      active = false;
-    };
-  }, [entitlement]);
-
-  const changeRenewal = useCallback(
-    async (cancel: boolean) => {
-      setRenewalBusy(true);
-      const result = await requestRenewalChange(cancel, entitlement);
-      setRenewalBusy(false);
-      setConfirmingCancel(false);
-
-      if (!result.ok) {
-        toast.error(
-          result.error === "network"
-            ? "Could not reach the licence server. Email support to cancel."
-            : "Could not change the renewal setting. Email support to cancel."
-        );
-        return;
-      }
-
-      setLicenseStatus((current) =>
-        current ? { ...current, renewalCancelled: result.cancelled } : current
-      );
-      toast.success(
-        result.cancelled
-          ? "Renewal cancelled — your licence stays active until it expires"
-          : "Renewal resumed"
-      );
-    },
-    [entitlement]
-  );
-
   const activateLicence = useCallback(async () => {
     const key = licenseKeyInput.trim();
     if (!key) return;
@@ -3684,53 +3626,24 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
       return;
     }
 
-    const reason = result.error;
-    toast.error(
-      reason === "network"
-        ? "Could not reach the licence server"
-        : reason === "licensing_not_configured"
-          ? "This build has no licence secret configured, so keys cannot be verified. Set LICENSE_SECRET."
-          : reason === "expired"
-            ? "That licence has expired"
-            : reason === "bad_signature"
-              ? "That licence key was not issued by ForgeMark Industries"
-              : "That licence key was not accepted"
-    );
+    toast.error(licenseErrorMessage(result.error ?? "malformed_key"));
   }, [licenseKeyInput]);
 
   /**
-   * Gate helper — asks the server for permission before running an export.
-   *
-   * The count lives on the server, so a normal install cannot reset it. A local
-   * app cannot enforce this against someone deliberately patching it; the AI
-   * quota and licence validity are the parts that are genuinely enforced.
+   * Export gate — checked here, on this machine. The key was verified when it
+   * was activated; an expired key blocks the export and the card offers the
+   * input to paste a current one.
    */
   const gatedExport = useCallback(
     (doExport: () => void) => {
-      void (async () => {
-        let permission;
-        try {
-          permission = await requestExportPermission(entitlement);
-        } catch {
-          permission = { allowed: false, remaining: null, plan: "free" as const };
-        }
+      const permission = exportPermission(entitlement);
+      if (!permission.allowed) {
+        toast.error(denialMessage(permission), { duration: 9000 });
+        return;
+      }
 
-        if (!permission.allowed) {
-          toast.error(denialMessage(permission), { duration: 9000 });
-          return;
-        }
-
-        doExport();
-        setOnboarding((current) => markExported(current));
-
-        if (permission.remaining === 0) {
-          toast.warning("That was the last free export this month.", { duration: 7000 });
-        } else if (permission.remaining !== null && permission.remaining <= 2) {
-          toast.message(
-            `Free plan: ${permission.remaining} export${permission.remaining === 1 ? "" : "s"} left this month.`
-          );
-        }
-      })();
+      doExport();
+      setOnboarding((current) => markExported(current));
     },
     [entitlement]
   );
@@ -7825,24 +7738,20 @@ onClick={downloadPenTraceSvg}
               </div>
             )}
 
-            {/* Licence status — exports ask the server before running */}
+            {/* Licence status — the key is verified on this machine, no server */}
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
                   Licence
                 </Label>
                 <span className="text-[10px] font-medium" data-license-status>
-                  {licenseStatus
-                    ? (ACCOUNT_PLAN_LABELS[licenseStatus.plan] ?? entitlementLabel(entitlement))
-                    : entitlementLabel(entitlement)}
+                  {entitlementLabel(entitlement)}
                 </span>
               </div>
 
-              {/* Only offer key entry when the account is genuinely unlicensed.
-                  Requiring a key because this client has no cached token made an
-                  already-paid account look like it needed activating. */}
-              {!isEntitlementValid(entitlement) &&
-                (!licenseStatus || licenseStatus.plan === "free") && (
+              {/* The gate only opens under a valid licence; this input is for a
+                  key that expires mid-session or for switching plans. */}
+              {!isEntitlementValid(entitlement) && (
                 <div className="space-y-1.5">
                   <Input
                     value={licenseKeyInput}
@@ -7853,7 +7762,7 @@ onClick={downloadPenTraceSvg}
                         void activateLicence();
                       }
                     }}
-                    placeholder="PGS1.…"
+                    placeholder="PGS2.…"
                     data-license-input
                     className="h-7 text-xs font-mono"
                   />
@@ -7868,77 +7777,37 @@ onClick={downloadPenTraceSvg}
                     {licenseBusy ? "Activating…" : "Activate licence"}
                   </Button>
                   <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    The free plan includes a monthly export allowance. A licence lifts the export
-                    limit and keeps the app working offline.
+                    Paste the key you received with your purchase. It is checked on this machine
+                    and keeps the app working offline.
                   </p>
                 </div>
               )}
 
-              {licenseStatus && licenseStatus.plan !== "free" && (
+              {isEntitlementValid(entitlement) && entitlement && (
                 <div className="space-y-1.5" data-license-details>
                   <div className="flex items-center justify-between text-[10px]">
                     <span className="text-muted-foreground">Exports</span>
-                    <span className="font-mono">
-                      {licenseStatus.exportsRemaining === null
-                        ? "unlimited"
-                        : `${licenseStatus.exportsRemaining} left this month`}
-                    </span>
+                    <span className="font-mono">unlimited</span>
                   </div>
                   <div className="flex items-center justify-between text-[10px]">
-                    <span className="text-muted-foreground">AI requests</span>
+                    <span className="text-muted-foreground">Valid until</span>
                     <span className="font-mono">
-                      {licenseStatus.aiRemaining} of {licenseStatus.aiLimit} left today
+                      {entitlement.expiresAt
+                        ? new Date(entitlement.expiresAt).toLocaleDateString()
+                        : "no expiry"}
                     </span>
                   </div>
 
-                  <div
-                    className="rounded-md bg-secondary/60 px-2 py-1.5 space-y-1.5"
-                    data-license-renewal
-                  >
-                    <p className="text-[10px] leading-snug">
-                      {licenseStatus.renewalCancelled
-                        ? "Renewal is cancelled. Your licence stays active until the current term ends."
-                        : "This licence renews automatically."}
-                    </p>
-
-                    {confirmingCancel ? (
-                      <div className="flex gap-1.5">
-                        <Button
-                          variant="secondary"
-                          size="sm"
-                          className="flex-1 h-6 text-[10px]"
-                          data-license-cancel-confirm
-                          disabled={renewalBusy}
-                          onClick={() => void changeRenewal(true)}
-                        >
-                          {renewalBusy ? "Cancelling…" : "Yes, cancel renewal"}
-                        </Button>
-                        <Button
-                          variant="ghost"
-                          size="sm"
-                          className="h-6 text-[10px]"
-                          onClick={() => setConfirmingCancel(false)}
-                        >
-                          Keep it
-                        </Button>
-                      </div>
-                    ) : (
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        className="w-full h-6 text-[10px]"
-                        data-license-cancel
-                        disabled={renewalBusy}
-                        onClick={() =>
-                          licenseStatus.renewalCancelled
-                            ? void changeRenewal(false)
-                            : setConfirmingCancel(true)
-                        }
-                      >
-                        {licenseStatus.renewalCancelled ? "Resume renewal" : "Cancel renewal"}
-                      </Button>
-                    )}
-                  </div>
+                  <p className="text-[10px] leading-snug text-muted-foreground">
+                    Renewals and key changes: email{" "}
+                    <a
+                      className="text-primary hover:underline"
+                      href="mailto:support@forgemarkindustries.com"
+                    >
+                      support@forgemarkindustries.com
+                    </a>
+                    .
+                  </p>
                 </div>
               )}
 
