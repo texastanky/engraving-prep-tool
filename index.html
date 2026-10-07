@@ -3,12 +3,13 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <meta name="robots" content="noindex,nofollow" />
 
     <!--
-      This shell serves both the software and the gun shop's landing page, so the
-      static values here describe the software (ForgeMark Industries) and the
-      landing page sets its own title and description at runtime. See docs/BRAND.md.
+      This shell serves the public landing page, the in-app route (/canvas) and
+      the 404 page, so the static values here describe the software (ForgeMark
+      Industries). Pages that need their own title, description or canonical set
+      it at runtime. See docs/BRAND.md. The /canvas route is kept out of search
+      results by the X-Robots-Tag header in vercel.json, not by a tag here.
     -->
     <title>Engraving Prep Tool — ForgeMark Industries</title>
     <meta
@@ -27,8 +28,24 @@
       content="Lay out and export laser engraving and marking work, including FFL and NFA marking blocks."
     />
     <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="ForgeMark Industries" />
+    <meta property="og:url" content="https://forgemarkindustries.com/" />
+    <meta
+      property="og:image"
+      content="https://forgemarkindustries.com/og-image.png"
+    />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+    <meta
+      property="og:image:alt"
+      content="Engraving Prep Tool by ForgeMark Industries"
+    />
 
-    <meta name="twitter:card" content="summary" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta
+      name="twitter:image"
+      content="https://forgemarkindustries.com/og-image.png"
+    />
 
     <!-- Fonts -->
     <link rel="preconnect" href="https://fonts.googleapis.com" />

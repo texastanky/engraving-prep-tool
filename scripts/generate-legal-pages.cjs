@@ -17,6 +17,7 @@ const LEGAL = path.join(ROOT, "legal");
 const PUBLIC = path.join(ROOT, "public");
 
 const BRAND = "ForgeMark Industries";
+const SITE = "https://forgemarkindustries.com";
 const EMAIL = "support@forgemarkindustries.com";
 const PHONE = "903-998-0262";
 // Deliberately empty: home-based business, so the street address is not
@@ -57,7 +58,7 @@ function assertPublishable(html, file) {
     throw new Error(
       `${file} still contains unresolved placeholders and must not be published: ${[
         ...new Set(leftovers),
-      ].join(", ")}`
+      ].join(", ")}`,
     );
   }
 
@@ -65,12 +66,12 @@ function assertPublishable(html, file) {
   // to turn up at the house, so a street address in a customer-facing page is
   // treated as a build failure rather than a style choice.
   const street = html.match(
-    /\b\d{1,6}\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3}\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Place|Pl|Way|Highway|Hwy)\b/
+    /\b\d{1,6}\s+[A-Z][A-Za-z]*(?:\s+[A-Z][A-Za-z]*){0,3}\s+(?:Street|St|Avenue|Ave|Road|Rd|Drive|Dr|Lane|Ln|Boulevard|Blvd|Court|Ct|Place|Pl|Way|Highway|Hwy)\b/,
   );
   if (street) {
     throw new Error(
       `${file} appears to publish a street address ("${street[0]}") and must not be ` +
-        "published. Use email and phone for contact, or set a PO Box in ADDRESS."
+        "published. Use email and phone for contact, or set a PO Box in ADDRESS.",
     );
   }
 }
@@ -79,7 +80,7 @@ function shell({ title, description, navPath, body }) {
   const nav = DOCS.map((doc) =>
     doc.path === navPath
       ? `<span class="current">${doc.title}</span>`
-      : `<a href="${doc.path}">${doc.title}</a>`
+      : `<a href="${doc.path}">${doc.title}</a>`,
   ).join("");
 
   return `<!doctype html>
@@ -89,6 +90,11 @@ function shell({ title, description, navPath, body }) {
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${title} — Engraving Prep Tool</title>
 <meta name="description" content="${description}">
+<link rel="canonical" href="${SITE}${navPath}">
+<meta property="og:type" content="website">
+<meta property="og:site_name" content="${BRAND}">
+<meta property="og:url" content="${SITE}${navPath}">
+<meta property="og:image" content="${SITE}/og-image.png">
 <style>
   :root { color-scheme: dark; }
   * { box-sizing: border-box; }

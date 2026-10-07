@@ -1,0 +1,11 @@
+# https://forgemarkindustries.com
+
+User-agent: *
+Allow: /
+
+# The editor at /canvas is kept out of the index by an X-Robots-Tag header (see
+# vercel.json) rather than a Disallow here. A crawler cannot read an indexing
+# header on a URL it is not allowed to fetch, so disallowing it as well would
+# defeat the directive and let the page be indexed from links alone.
+
+Sitemap: https://forgemarkindustries.com/sitemap.xml

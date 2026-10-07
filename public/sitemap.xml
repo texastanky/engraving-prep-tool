@@ -1,0 +1,20 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+  lastmod is deliberately omitted. Google discounts it when it looks unreliable,
+  and the legal pages are regenerated from legal/*.md on every build, so a
+  hand-written date here would go stale.
+-->
+<urlset xmlns="http://www.sitemaps.org/schemas/sitemap/0.9">
+  <url>
+    <loc>https://forgemarkindustries.com/</loc>
+  </url>
+  <url>
+    <loc>https://forgemarkindustries.com/terms</loc>
+  </url>
+  <url>
+    <loc>https://forgemarkindustries.com/privacy</loc>
+  </url>
+  <url>
+    <loc>https://forgemarkindustries.com/refunds</loc>
+  </url>
+</urlset>

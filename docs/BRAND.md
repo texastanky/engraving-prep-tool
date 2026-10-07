@@ -28,39 +28,33 @@ the end of this document.
 | App shell title, description, author, icon   | ForgeMark Industries                                          | `index.html`, `public/icon.png`                      |
 | Published legal pages                        | ForgeMark Industries, naming the LLC as the contracting party | `legal/*.md` → `public/{terms,privacy,refunds}.html` |
 | Licence card links, support address          | ForgeMark Industries, `support@forgemarkindustries.com`       | `src/pages/canvas/_components/canvas-editor.tsx`     |
-| Gun shop landing page (`/`) and its footer   | Petes Guns and Stuff                                          | `src/pages/Index.tsx`                                |
-| Gun shop contact                             | `support@petesgunsandstuff.com`                               | `src/pages/Index.tsx`                                |
+| Public landing page (`/`) and its footer     | ForgeMark Industries, naming the LLC as the contracting party | `src/pages/Landing.tsx`                              |
 
 The legal documents name the brand first and the LLC second, for example
 "ForgeMark Industries — a d/b/a of Petes Guns and Stuff LLC". That reads as a
 software vendor to a customer while keeping the LLC as the party that contracts
 and owns the intellectual property. Do not remove the LLC from those documents.
 
-One shell file serves both brands, so `index.html` carries the software values
-and the landing page swaps in the gun shop's title and description at runtime
-(`useGunShopMetadata` in `src/pages/Index.tsx`).
+The published site is ForgeMark Industries only: `index.html` carries the
+software values, and the landing page sets its own title, description and
+canonical at runtime (`src/pages/Landing.tsx`).
 
-## The gap that still undermines separation
+Search visibility follows the same split. The public pages are indexable and are
+listed in `public/sitemap.xml`; the in-app route `/canvas` is kept out of the
+index by an `X-Robots-Tag` header in `vercel.json`, and `public/robots.txt` does
+not disallow it (a disallowed URL is never crawled, so Google would never read
+the header). There is no site-wide `noindex` any more — Preview deployments stay
+out of Google because Vercel adds that header to them automatically.
 
-**Both businesses are currently served from one deployment and one domain.** The
-gun shop page, the software, and the published legal pages all live together, and
-the landing page advertises FFL transfers, inventory and a Class 2 SOT.
+## The public site is software only
 
-For payment-processor review that matters: the URL you submit is what the
-underwriter reads. If they land on FFL transfers and firearm inventory alongside
-the software, the separation only exists in the paperwork.
+The gun shop page is gone: `forgemarkindustries.com` publishes the product page
+and the legal pages and nothing else, so nothing at the domain an underwriter
+visits advertises FFL transfers, inventory or the Class 2 SOT. The separation is
+no longer only in the paperwork, and the software no longer needs a domain move.
 
-Options, in order of strength:
-
-1. **Separate domain and deployment for the software** (for example
-   `forgemarkindustries.com`), with the software, legal pages and support email
-   living there and the gun shop staying on its own domain. This is the clean
-   answer and the one to aim for before applying to a processor.
-2. **Separate routes on one domain** with the software at a clearly branded path.
-   Weaker, because the gun shop is still one click away.
-
-Nothing in the code prevents option 1: the app is already a single Vite build
-with its own branding, and moving it is a deployment change rather than a rewrite.
+What is still shared is the legal entity — the LLC holds the FFL and the SOT —
+and that has to be disclosed rather than hidden. See the next section.
 
 ## Payment processors: what to expect
 
@@ -133,10 +127,10 @@ Flagged for your attorney and accountant, not settled here:
 
 ## The two domains
 
-| Domain | Serves | Repository |
-| --- | --- | --- |
-| `petesgunsandstuff.com` | The gun shop site: transfers, inventory, services, its own legal pages | `petes-guns-site` |
-| `forgemarkindustries.com` | The software: public product page, the editor, and the software's legal pages | this repository |
+| Domain                    | Serves                                                                        | Repository        |
+| ------------------------- | ----------------------------------------------------------------------------- | ----------------- |
+| `petesgunsandstuff.com`   | The gun shop site: transfers, inventory, services, its own legal pages        | `petes-guns-site` |
+| `forgemarkindustries.com` | The software: public product page, the editor, and the software's legal pages | this repository   |
 
 The app no longer carries gun shop marketing. Before this change the same
 deployment served an FFL landing page (transfers, inventory, SOT) and the
@@ -146,11 +140,11 @@ processor review. That page was removed here because the gun shop site in
 
 ### What is public on the software domain
 
-| Route | Access |
-| --- | --- |
-| `/` | Public product page (ForgeMark Industries) |
-| `/terms`, `/privacy`, `/refunds` | Public static pages, generated from `legal/*.md` |
-| `/canvas` | Requires a licence key (checked in the app, offline) |
+| Route                            | Access                                               |
+| -------------------------------- | ---------------------------------------------------- |
+| `/`                              | Public product page (ForgeMark Industries)           |
+| `/terms`, `/privacy`, `/refunds` | Public static pages, generated from `legal/*.md`     |
+| `/canvas`                        | Requires a licence key (checked in the app, offline) |
 
 The editor used to sit behind an account gate, which meant a paying customer had
 to create an account before they could use the thing they bought. The gate is
@@ -171,8 +165,8 @@ required for underwriting and for customers deciding whether to buy.
    `https://forgemarkindustries.com/update.json`. The app defaults to that URL
    (`VITE_UPDATE_MANIFEST_URL` overrides it), so publish the manifest there when
    you release an update.
-5. Keep `petesgunsandstuff.com` on its own project. Linking *from* the gun shop
-   *to* the software is fine; the software site deliberately does not link to the
+5. Keep `petesgunsandstuff.com` on its own project. Linking _from_ the gun shop
+   _to_ the software is fine; the software site deliberately does not link to the
    gun shop, so an underwriter reviewing the software domain sees only the
    software.
 
@@ -187,12 +181,12 @@ required for underwriting and for customers deciding whether to buy.
 This is a home-based business. The street address is deliberately **not**
 published anywhere customer-facing, so nobody is invited to turn up at the house.
 
-| Surface | Contact shown |
-| --- | --- |
-| Product page footer | Company name, email, phone |
-| Legal pages (`/terms`, `/privacy`, `/refunds`) | Company name, email, phone |
-| EULA notices clause | Email only |
-| Gun shop site | City and state only (verified: its schema has locality, region and postcode, no street address) |
+| Surface                                        | Contact shown                                                                                   |
+| ---------------------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Product page footer                            | Company name, email, phone                                                                      |
+| Legal pages (`/terms`, `/privacy`, `/refunds`) | Company name, email, phone                                                                      |
+| EULA notices clause                            | Email only                                                                                      |
+| Gun shop site                                  | City and state only (verified: its schema has locality, region and postcode, no street address) |
 
 **A build guard enforces it.** `scripts/generate-legal-pages.cjs` fails the build
 if a customer-facing legal page contains something that looks like a street

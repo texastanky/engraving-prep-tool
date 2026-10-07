@@ -16,6 +16,7 @@ import { Button } from "@/components/ui/button.tsx";
 const PAGE_TITLE = "Engraving Prep Tool — ForgeMark Industries";
 const PAGE_DESCRIPTION =
   "Lay out and export laser engraving and marking work: design preparation, FFL and NFA marking blocks, masks, vector tools, and actual-size export.";
+const PAGE_URL = "https://forgemarkindustries.com/";
 
 const FEATURES = [
   {
@@ -56,6 +57,16 @@ export default function Landing() {
     document.title = PAGE_TITLE;
     const meta = document.querySelector('meta[name="description"]');
     if (meta) meta.setAttribute("content", PAGE_DESCRIPTION);
+
+    // The shell is shared with the in-app route, so the canonical for the public
+    // page is set here rather than in index.html.
+    let canonical = document.querySelector('link[rel="canonical"]');
+    if (!canonical) {
+      canonical = document.createElement("link");
+      canonical.setAttribute("rel", "canonical");
+      document.head.appendChild(canonical);
+    }
+    canonical.setAttribute("href", PAGE_URL);
   }, []);
 
   return (
@@ -65,8 +76,12 @@ export default function Landing() {
           <div className="flex items-center gap-2">
             <ShieldCheck className="h-5 w-5 text-primary" />
             <div className="leading-tight">
-              <div className="font-serif text-sm font-bold">ForgeMark Industries</div>
-              <div className="text-[11px] text-muted-foreground">Engraving Prep Tool</div>
+              <div className="font-serif text-sm font-bold">
+                ForgeMark Industries
+              </div>
+              <div className="text-[11px] text-muted-foreground">
+                Engraving Prep Tool
+              </div>
             </div>
           </div>
           <div className="flex items-center gap-2">
@@ -76,7 +91,10 @@ export default function Landing() {
             >
               Pricing
             </a>
-            <Link to="/terms" className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline">
+            <Link
+              to="/terms"
+              className="hidden text-sm text-muted-foreground transition-colors hover:text-foreground sm:inline"
+            >
               Terms
             </Link>
             <Button asChild size="sm">
@@ -89,14 +107,18 @@ export default function Landing() {
       </nav>
 
       <section className="mx-auto max-w-6xl px-4 pt-16 pb-12">
-        <p className="text-xs uppercase tracking-[0.2em] text-primary">For laser engraving and marking</p>
+        <p className="text-xs uppercase tracking-[0.2em] text-primary">
+          For laser engraving and marking
+        </p>
         <h1 className="mt-3 max-w-3xl font-serif text-4xl leading-tight font-bold sm:text-5xl">
-          Prepare engraving artwork, including marking blocks, without leaving your desk.
+          Prepare engraving artwork, including marking blocks, without leaving
+          your desk.
         </h1>
         <p className="mt-5 max-w-2xl text-muted-foreground">
-          Engraving Prep Tool is a desktop workspace for shops that mark metal. Bring in artwork, lay it
-          against the real part at true size, mask and adjust it, add a marking block from your saved shop
-          details, and export files your laser software can open at actual size.
+          Engraving Prep Tool is a desktop workspace for shops that mark metal.
+          Bring in artwork, lay it against the real part at true size, mask and
+          adjust it, add a marking block from your saved shop details, and
+          export files your laser software can open at actual size.
         </p>
         <div className="mt-7 flex flex-wrap gap-3">
           <Button asChild>
@@ -114,10 +136,15 @@ export default function Landing() {
         <h2 className="font-serif text-2xl font-bold">What it does</h2>
         <div className="mt-6 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((feature) => (
-            <div key={feature.title} className="rounded-lg border border-border bg-card p-4">
+            <div
+              key={feature.title}
+              className="rounded-lg border border-border bg-card p-4"
+            >
               <feature.icon className="h-4 w-4 text-primary" />
               <h3 className="mt-3 text-sm font-semibold">{feature.title}</h3>
-              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">{feature.body}</p>
+              <p className="mt-1.5 text-xs leading-relaxed text-muted-foreground">
+                {feature.body}
+              </p>
             </div>
           ))}
         </div>
@@ -129,12 +156,12 @@ export default function Landing() {
             <h2 className="font-serif text-2xl font-bold">Who it is for</h2>
             <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
               <li>
-                Shops that mark firearms: manufacturer marking and NFA marking, engraving businesses, and
-                laser marking services
+                Shops that mark firearms: manufacturer marking and NFA marking,
+                engraving businesses, and laser marking services
               </li>
               <li>
-                Anyone doing vector cutting or raster engraving on metal, anodized parts, polymer, and
-                coated blanks
+                Anyone doing vector cutting or raster engraving on metal,
+                anodized parts, polymer, and coated blanks
               </li>
             </ul>
           </div>
@@ -142,8 +169,14 @@ export default function Landing() {
             <h2 className="font-serif text-2xl font-bold">What you need</h2>
             <ul className="mt-4 space-y-2 text-sm text-muted-foreground">
               <li>A Windows 10 or 11 PC</li>
-              <li>Laser software that can import SVG, PNG, JPEG or PDF at actual size</li>
-              <li>No internet connection required to work, once a licence is activated</li>
+              <li>
+                Laser software that can import SVG, PNG, JPEG or PDF at actual
+                size
+              </li>
+              <li>
+                No internet connection required to work, once a licence is
+                activated
+              </li>
             </ul>
           </div>
         </div>
@@ -156,10 +189,13 @@ export default function Landing() {
             <h3 className="text-sm font-semibold">Licensed</h3>
             <p className="mt-1 font-serif text-3xl font-bold">Contact us</p>
             <p className="mt-2 text-xs text-muted-foreground">
-              A licence key unlocks the app on your machine: the full toolset, unlimited exports,
-              and offline use — no account and no internet connection once the key is entered.
-              Email{" "}
-              <a className="text-primary hover:underline" href="mailto:support@forgemarkindustries.com">
+              A licence key unlocks the app on your machine: the full toolset,
+              unlimited exports, and offline use — no account and no internet
+              connection once the key is entered. Email{" "}
+              <a
+                className="text-primary hover:underline"
+                href="mailto:support@forgemarkindustries.com"
+              >
                 support@forgemarkindustries.com
               </a>{" "}
               for current pricing and a licence key.
@@ -177,12 +213,16 @@ export default function Landing() {
 
       <section className="mx-auto max-w-6xl px-4 py-12">
         <div className="rounded-lg border border-border bg-card p-5">
-          <h2 className="text-sm font-semibold">A layout tool, not legal advice</h2>
+          <h2 className="text-sm font-semibold">
+            A layout tool, not legal advice
+          </h2>
           <p className="mt-2 text-xs leading-relaxed text-muted-foreground">
-            This software helps you lay out and export artwork, including marking blocks. It does not
-            determine whether a marking satisfies any requirement, and any default size or layout it offers
-            is a starting point only. You are responsible for confirming current requirements and for
-            measuring a test mark before marking a finished part. See the{" "}
+            This software helps you lay out and export artwork, including
+            marking blocks. It does not determine whether a marking satisfies
+            any requirement, and any default size or layout it offers is a
+            starting point only. You are responsible for confirming current
+            requirements and for measuring a test mark before marking a finished
+            part. See the{" "}
             <Link className="text-primary hover:underline" to="/terms">
               Terms of Service
             </Link>
@@ -197,14 +237,20 @@ export default function Landing() {
             <p className="font-medium text-foreground">ForgeMark Industries</p>
             <p>a d/b/a of Petes Guns and Stuff LLC</p>
             <p className="mt-1">
-              <a className="text-primary hover:underline" href="mailto:support@forgemarkindustries.com">
+              <a
+                className="text-primary hover:underline"
+                href="mailto:support@forgemarkindustries.com"
+              >
                 <Mail className="mr-1 inline h-3 w-3" />
                 support@forgemarkindustries.com
               </a>
             </p>
           </div>
 
-          <nav aria-label="Legal" className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground">
+          <nav
+            aria-label="Legal"
+            className="flex flex-wrap gap-x-4 gap-y-2 text-xs text-muted-foreground"
+          >
             <Link to="/terms" className="hover:text-foreground">
               Terms of Service
             </Link>
@@ -221,8 +267,8 @@ export default function Landing() {
         </div>
         <div className="border-t border-border/60">
           <p className="mx-auto max-w-6xl px-4 py-4 text-[11px] text-muted-foreground">
-            &copy; {new Date().getFullYear()} Petes Guns and Stuff LLC d/b/a ForgeMark Industries. All
-            rights reserved.
+            &copy; {new Date().getFullYear()} Petes Guns and Stuff LLC d/b/a
+            ForgeMark Industries. All rights reserved.
           </p>
         </div>
       </footer>

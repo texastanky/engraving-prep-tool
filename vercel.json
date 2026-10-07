@@ -14,11 +14,20 @@
       ]
     },
     {
-      "source": "/(.*)",
+      "source": "/canvas",
       "headers": [
         {
           "key": "X-Robots-Tag",
-          "value": "noindex, nofollow"
+          "value": "noindex"
+        }
+      ]
+    },
+    {
+      "source": "/:locale/canvas",
+      "headers": [
+        {
+          "key": "X-Robots-Tag",
+          "value": "noindex"
         }
       ]
     }
