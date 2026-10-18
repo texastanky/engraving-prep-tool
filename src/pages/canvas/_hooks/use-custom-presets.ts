@@ -1,13 +1,27 @@
 /**
- * Hook for managing custom part outline presets.
+ * Hook for managing custom part outline presets, with a private cloud library
+ * when the user is signed in.
  *
- * The list is kept in a file through the local API, with localStorage as the
- * fallback for a plain browser. Browser storage is keyed to the page's origin,
- * and the desktop app served its page from a different port every launch — so
+ * Local layers (in order of preference): the app's file store through the local
+ * API, then localStorage. Browser storage is keyed to the page's origin, and
+ * the desktop app served its page from a different port every launch — so
  * parts saved in the workspace did not survive a restart. A file does.
+ *
+ * Cloud layer: when the user is signed in, saved parts are also written to
+ * their `part_templates` table rows so the library follows them between
+ * machines. On start the cloud list, when it answers, wins: it is newer than
+ * anything local.
  */
 import { useState, useCallback, useEffect } from "react";
 import type { DesignMask } from "../_components/design-mask.ts";
+import {
+  deletePartTemplate,
+  ensureValidSession,
+  insertPartTemplate,
+  listPartTemplates,
+  type NewPartTemplate,
+  type PartTemplateRow,
+} from "@/lib/supabase.ts";
 
 export type CustomPresetPoint = {
   x: number;
@@ -31,19 +45,13 @@ export type CustomPresetTraceStyle = {
 export type CustomPresetSetup = {
   space: { width: number; height: number };
   design?: {
-    /** Centre of the artwork on the workspace. */
     centerX: number;
     centerY: number;
-    /** Rendered width, so a different resolution of the same art still works. */
     width: number;
     rotation: number;
   };
   mask?: DesignMask | null;
   keepOuts?: DesignMask[];
-  /**
-   * Other parts on the bed, as offsets from the traced outline. A part may carry
-   * its own outline (a saved trace of a different piece).
-   */
   partCopies?: {
     id: string;
     dx: number;
@@ -129,6 +137,41 @@ async function saveToStore(presets: CustomPreset[]): Promise<void> {
   }
 }
 
+function rowToPreset(row: PartTemplateRow): CustomPreset {
+  const preset: CustomPreset = {
+    id: `cloud-${row.id}`,
+    name: row.name,
+    width: row.width,
+    height: row.height,
+    unit: row.unit,
+    maskDataUrl: row.mask_data_url,
+    createdAt: row.created_at,
+  };
+  if (Array.isArray(row.trace_points)) preset.tracePoints = row.trace_points as CustomPresetPoint[];
+  if (typeof row.trace_closed === "boolean") preset.traceClosed = row.trace_closed;
+  if (row.trace_style && typeof row.trace_style === "object") {
+    preset.traceStyle = row.trace_style as CustomPresetTraceStyle;
+  }
+  if (row.setup && typeof row.setup === "object") preset.setup = row.setup as CustomPresetSetup;
+  if (row.source === "pen-trace" || row.source === "outline-tracer") preset.source = row.source;
+  return preset;
+}
+
+function presetToRow(preset: CustomPreset): NewPartTemplate {
+  return {
+    name: preset.name,
+    width: preset.width,
+    height: preset.height,
+    unit: preset.unit,
+    mask_data_url: preset.maskDataUrl,
+    trace_points: preset.tracePoints ?? null,
+    trace_closed: preset.traceClosed ?? null,
+    trace_style: preset.traceStyle ?? null,
+    setup: preset.setup ?? null,
+    source: preset.source ?? null,
+  };
+}
+
 export function useCustomPresets() {
   const [presets, setPresets] = useState<CustomPreset[]>(() => loadPresets());
 
@@ -147,6 +190,24 @@ export function useCustomPresets() {
     };
   }, []);
 
+  // Cloud adoption: when signed in, the cloud library wins on start.
+  useEffect(() => {
+    let cancelled = false;
+    void (async () => {
+      const session = await ensureValidSession();
+      if (!session || cancelled) return;
+      const rows = await listPartTemplates(session);
+      if (cancelled || !rows) return;
+      const cloudPresets = rows.map(rowToPreset);
+      setPresets(cloudPresets);
+      savePresets(cloudPresets);
+      void saveToStore(cloudPresets);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const addPreset = useCallback((preset: Omit<CustomPreset, "id">) => {
     const newPreset: CustomPreset = {
       ...preset,
@@ -158,6 +219,16 @@ export function useCustomPresets() {
       void saveToStore(updated);
       return updated;
     });
+    void (async () => {
+      const session = await ensureValidSession();
+      if (!session) return;
+      const row = await insertPartTemplate(session, presetToRow(newPreset));
+      if (row) {
+        setPresets((prev) =>
+          prev.map((p) => (p.id === newPreset.id ? rowToPreset(row) : p))
+        );
+      }
+    })();
     return newPreset.id;
   }, []);
 
@@ -168,6 +239,12 @@ export function useCustomPresets() {
       void saveToStore(updated);
       return updated;
     });
+    void (async () => {
+      if (!id.startsWith("cloud-")) return;
+      const session = await ensureValidSession();
+      if (!session) return;
+      await deletePartTemplate(session, id.slice("cloud-".length));
+    })();
   }, []);
 
   return { presets, addPreset, removePreset };

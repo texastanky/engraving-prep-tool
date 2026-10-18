@@ -87,6 +87,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import CropModal from "./crop-modal.tsx";
+import { AccountButton } from "@/components/account-button.tsx";
 import { removeBackground, roundCorners } from "./image-utils.ts";
 import {
   MASK_SHAPE_GROUPS,
@@ -5485,6 +5486,8 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                   </DropdownMenuItem>
                 </DropdownMenuContent>
             </DropdownMenu>
+
+            <AccountButton />
 
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
