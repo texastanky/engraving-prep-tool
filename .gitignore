@@ -45,3 +45,4 @@ license-private.pem
 license-private*.pem
 license-issued.json
 /desktop-dist-new
+.env
