@@ -4,10 +4,10 @@ import { verifyLicenseKey } from "../server/licensing.js";
  * The caller's licence, which is the whole account system now: a valid PGS2
  * key proves the plan, with no session cookies or account store involved.
  */
-function licenceFromRequest(req) {
+function licenceFromRequest(req, options) {
   const header = req.headers?.["x-licence-key"];
   const key = Array.isArray(header) ? header[0] : header;
-  const result = verifyLicenseKey(key, {});
+  const result = verifyLicenseKey(key, options);
   return result.ok ? { sub: result.sub, plan: result.plan } : null;
 }
 
@@ -168,7 +168,7 @@ function systemPrompt(locale, hasDesignImage, hasPartPhoto) {
   ].join(" ");
 }
 
-export default async function handler(req, res) {
+export default async function handler(req, res, { env = process.env, licenseOptions } = {}) {
   res.setHeader("Cache-Control", "no-store");
 
   if (req.method === "OPTIONS") {
@@ -181,7 +181,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const licence = licenceFromRequest(req);
+  const licence = licenceFromRequest(req, licenseOptions);
   if (!licence) {
     res.status(401).json({ error: "licence_required" });
     return;
@@ -204,7 +204,7 @@ export default async function handler(req, res) {
     return;
   }
 
-  const apiKey = process.env.OPENAI_API_KEY;
+  const apiKey = env.OPENAI_API_KEY;
   if (!apiKey) {
     res.status(503).json({ error: "missing_configuration" });
     return;
@@ -225,7 +225,7 @@ export default async function handler(req, res) {
         "Content-Type": "application/json",
       },
       body: JSON.stringify({
-        model: process.env.OPENAI_ASSISTANT_MODEL || DEFAULT_MODEL,
+        model: env.OPENAI_ASSISTANT_MODEL || DEFAULT_MODEL,
         messages: [
           { role: "system", content: systemPrompt(context.locale, hasDesignImage, hasPartPhoto) },
           {

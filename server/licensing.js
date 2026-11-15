@@ -18,9 +18,6 @@ import { readFileSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-/** Directory holding this module, which works inside app.asar too. */
-const MODULE_DIR = path.dirname(fileURLToPath(import.meta.url));
-
 export const LICENSE_PREFIX = "PGS1";
 
 /**
@@ -74,6 +71,8 @@ let cachedPublicKey;
 function getPublicKey() {
   if (cachedPublicKey !== undefined) return cachedPublicKey;
   cachedPublicKey = null;
+  // Workers passes key bytes directly and has no module filesystem location.
+  const moduleDir = path.dirname(fileURLToPath(import.meta.url));
 
   // Resolve next to THIS MODULE, not against the working directory. In the
   // packaged app the file ships inside app.asar, so a cwd-relative path would
@@ -81,7 +80,7 @@ function getPublicKey() {
   // The cwd candidate is kept as a fallback for unusual layouts.
   const candidates = [];
   if (process.env.LICENSE_PUBLIC_KEY_FILE) candidates.push(process.env.LICENSE_PUBLIC_KEY_FILE);
-  candidates.push(path.join(MODULE_DIR, "license-public.pem"));
+  candidates.push(path.join(moduleDir, "license-public.pem"));
   candidates.push(path.resolve("server/license-public.pem"));
 
   for (const file of candidates) {

@@ -1,4 +1,9 @@
 {
+  "git": {
+    "deploymentEnabled": {
+      "migration/cloudflare-preview": false
+    }
+  },
   "headers": [
     {
       "source": "/update.json",
