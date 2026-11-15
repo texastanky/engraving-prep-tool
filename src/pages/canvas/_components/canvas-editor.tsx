@@ -75,7 +75,7 @@ import AiComposePanel from "./ai-compose-panel.tsx";
 import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.tsx";
 import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
-import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
+import ConverterPresetTransfer from "./converter-preset-transfer.tsx";
 import {
   useCustomPresets,
   type CustomPreset,
@@ -5101,7 +5101,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
    */
   const referencePanels = (
     <>
-                  <XtoolSettingsConverterPanel />
+                  <ConverterPresetTransfer />
                   {/* Templates — hidden entirely while the list is empty.
                       It is now deliberately empty: the previous contents were licensed
                       third-party design files that should not ship inside a product.
@@ -5441,8 +5441,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
               <Sparkles className="mr-1.5 h-4 w-4" />
               <span className="hidden sm:inline">Guide</span>
             </Button>
-            {/* Panels toggle — moves the reference tools (templates, AI compose,
-                converter) between the left column and a rail beside the canvas. */}
+            {/* Panels toggle — moves reference tools beside the canvas. */}
             <Button
               variant={referenceRailOpen ? "default" : "secondary"}
               size="sm"
