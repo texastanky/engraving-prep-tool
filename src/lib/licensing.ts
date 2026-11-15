@@ -1,5 +1,6 @@
 /**
- * Client side of licensing — the licence key is the app's account.
+ * Client-side licensing for protected server features. Editing and local
+ * exports do not require a licence.
  *
  * A PGS2 key is an Ed25519-signed statement from the seller: `{ sub, plan, exp }`
  * as base64url JSON, plus a signature over that payload. The app verifies it on
@@ -9,8 +10,8 @@
  *
  * The verified key is cached in local storage so later launches open straight
  * away. `loadEntitlement` reads that cache and trusts the signed payload for
- * display; the signature is checked by the gate (`loadVerifiedEntitlement`),
- * when a key is activated, and again by every server endpoint that accepts a
+ * display; the signature is checked when a key is activated, and again by
+ * every server endpoint that accepts a
  * key — see `licenseKeyHeader`.
  */
 
@@ -277,7 +278,7 @@ export function entitlementLabel(entitlement: Entitlement | null, now: Date = ne
   return `${plan} licence · expires in ${days} day${days === 1 ? "" : "s"}`;
 }
 
-/** Decide whether an export may run. Exports are unlimited under a valid licence. */
+/** Local exports are available without activating a licence. */
 export function exportPermission(
   entitlement: Entitlement | null,
   now: Date = new Date()
@@ -285,7 +286,7 @@ export function exportPermission(
   if (isEntitlementValid(entitlement, now)) {
     return { allowed: true, plan: entitlement!.plan };
   }
-  return { allowed: false, plan: "free", reason: "license_required" };
+  return { allowed: true, plan: "free" };
 }
 
 /** Human-readable explanation for a denied export. */

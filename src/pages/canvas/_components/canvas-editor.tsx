@@ -3630,11 +3630,6 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
     toast.error(licenseErrorMessage(result.error ?? "malformed_key"));
   }, [licenseKeyInput]);
 
-  /**
-   * Export gate — checked here, on this machine. The key was verified when it
-   * was activated; an expired key blocks the export and the card offers the
-   * input to paste a current one.
-   */
   const gatedExport = useCallback(
     (doExport: () => void) => {
       const permission = exportPermission(entitlement);
@@ -7745,15 +7740,17 @@ onClick={downloadPenTraceSvg}
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-                  Licence
+                  AI licence (optional)
                 </Label>
                 <span className="text-[10px] font-medium" data-license-status>
                   {entitlementLabel(entitlement)}
                 </span>
               </div>
 
-              {/* The gate only opens under a valid licence; this input is for a
-                  key that expires mid-session or for switching plans. */}
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Editing and local exports need no key. A valid licence is still required
+                for server-side AI features.
+              </p>
               {!isEntitlementValid(entitlement) && (
                 <div className="space-y-1.5">
                   <Input
@@ -7780,8 +7777,8 @@ onClick={downloadPenTraceSvg}
                     {licenseBusy ? "Activating…" : "Activate licence"}
                   </Button>
                   <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Paste the key you received with your purchase. It is checked on this machine
-                    and keeps the app working offline.
+                    If you have an AI licence key, activate it here. You can keep editing
+                    and exporting without one.
                   </p>
                 </div>
               )}
