@@ -53,5 +53,6 @@ labelled actual-size. Art that extends past the material is not silently shrunk;
 the app warns so it can be repositioned or resized intentionally. SVG import
 does not replace Open Project for restoring images, filters or masks.
 
-The header controls wrap on narrow browser windows. Phone viewport checks are
+The header controls wrap and reference panels stack on narrow browser windows,
+including when the beside-canvas panel option is selected. Phone viewport checks are
 not certification of real iOS/Android touch, file-picker or download behavior.

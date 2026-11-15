@@ -5742,7 +5742,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                 </header>
 
       <div className="flex-1 mx-auto max-w-7xl w-full px-3 py-3 sm:px-4 sm:py-6">
-        <div className={`grid min-w-0 gap-4 sm:gap-6 ${referenceRailOpen ? "grid-cols-[280px_minmax(0,1fr)_280px]" : "lg:grid-cols-[280px_1fr]"}`}>
+        <div className={`grid grid-cols-1 min-w-0 gap-4 sm:gap-6 ${referenceRailOpen ? "lg:grid-cols-[280px_minmax(0,1fr)_280px]" : "lg:grid-cols-[280px_1fr]"}`}>
 
           {/* Reference rail — rendered only when there is room for a third column.
               `order-3` places it after the canvas and the left column even though
@@ -5750,7 +5750,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
           {referenceRailOpen && (
             <div
               data-reference-rail
-              className="flex min-w-0 w-[280px] flex-col gap-3 overflow-y-auto lg:max-h-[calc(100vh-100px)] lg:order-3"
+              className="flex min-w-0 w-full lg:w-[280px] flex-col gap-3 overflow-y-auto lg:max-h-[calc(100vh-100px)] lg:order-3"
             >
               {referencePanels}
             </div>
