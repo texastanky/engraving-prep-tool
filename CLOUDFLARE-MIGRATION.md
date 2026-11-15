@@ -16,7 +16,8 @@ pnpm cloudflare:dev
 
 `cloudflare:check` compiles the app and bundles the Worker with `--dry-run`.
 It does not upload or deploy. `cloudflare:dev` runs the Cloudflare runtime
-locally against `dist`; rebuild after changing frontend code.
+locally against `dist`. Stop the local server before rebuilding or running
+`cloudflare:check`, then restart it so its asset snapshot matches the new build.
 
 The Worker serves the React SPA, the existing legal-page rewrites, `/canvas`
 noindex headers, and uncached cross-origin `/update.json`. It adapts the
