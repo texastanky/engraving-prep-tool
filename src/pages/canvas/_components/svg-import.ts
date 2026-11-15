@@ -6,8 +6,8 @@
  * converted to path data and re-parsed, which keeps one code path for geometry
  * and exercises the arc conversion for circles and rounded corners.
  *
- * The result is fitted (aspect preserved, centred) into a target box so imported
- * art lands on the material at a sensible size instead of overflowing.
+ * With material dimensions, absolute document units preserve size and origin.
+ * Unmeasured artwork is fitted into the target box.
  */
 
 import { parsePathData } from "./svg-path-data.ts";
@@ -211,6 +211,10 @@ const SKIPPED_TAGS = new Set([
 
 /** Decide how the laser should treat an element from its paint. */
 function modeForElement(element: Element, fallback: VectorMode): VectorMode {
+  for (let parent: Element | null = element; parent; parent = parent.parentElement) {
+    const operation = parent.getAttribute("data-operation");
+    if (operation === "cut" || operation === "score" || operation === "engrave") return operation;
+  }
   const style = element.getAttribute("style") || "";
   const styleFill = /fill\s*:\s*([^;]+)/.exec(style)?.[1]?.trim();
   const styleStroke = /stroke\s*:\s*([^;]+)/.exec(style)?.[1]?.trim();
@@ -241,6 +245,8 @@ export const DEFAULT_MAX_ANCHORS = 150_000;
 export type SvgImportOptions = {
   /** Where the artwork should be placed, in canvas display pixels. */
   targetBox: { x: number; y: number; w: number; h: number };
+  /** Physical size represented by the target box; enables actual-size import. */
+  materialSizeIn?: { width: number; height: number };
   defaultMode?: VectorMode;
   /** Most shapes a single import may produce. */
   maxObjects?: number;
@@ -253,11 +259,55 @@ export type SvgImportResult = {
   /** Non-fatal notes worth surfacing to the user. */
   warnings: string[];
   sourceBounds: { w: number; h: number };
+  actualSize?: boolean;
   /** Set when the file was refused outright; `objects` is then empty. */
   error?: string;
   /** What had been counted when the import stopped, for diagnostics. */
   counts?: { shapes: number; anchors: number };
 };
+
+function lengthInches(value: string | null): number | null {
+  const match = value?.trim().match(/^(\+?(?:\d+(?:\.\d*)?|\.\d+)(?:e[+-]?\d+)?)\s*(mm|cm|in|pt|pc|px)?$/i);
+  if (!match) return null;
+  const units: Record<string, number> = { mm: 1 / 25.4, cm: 1 / 2.54, in: 1, pt: 1 / 72, pc: 1 / 6, px: 1 / 96 };
+  const inches = Number(match[1]) * units[(match[2] || "px").toLowerCase()];
+  return Number.isFinite(inches) && inches > 0 ? inches : null;
+}
+
+function documentPlacement(root: Element, options: SvgImportOptions): Matrix | null {
+  if (!options.materialSizeIn) return null;
+  const values = root.getAttribute("viewBox")?.trim().split(/[\s,]+/).map(Number);
+  const box = values?.length === 4 && values.every(Number.isFinite) && values[2] > 0 && values[3] > 0
+    ? { x: values[0], y: values[1], w: values[2], h: values[3] } : null;
+  if (values && !box) return null;
+  const declaredWidth = root.getAttribute("width");
+  const declaredHeight = root.getAttribute("height");
+  let width = lengthInches(declaredWidth);
+  let height = lengthInches(declaredHeight);
+  if ((declaredWidth && !width) || (declaredHeight && !height)) return null;
+  if (box && width && !height) height = width * box.h / box.w;
+  if (box && height && !width) width = height * box.w / box.h;
+  if (!width || !height) return null;
+  const viewBox = box ?? { x: 0, y: 0, w: width * 96, h: height * 96 };
+  let sx = width / viewBox.w;
+  let sy = height / viewBox.h;
+  let dx = 0;
+  let dy = 0;
+  const aspect = (root.getAttribute("preserveAspectRatio") || "xMidYMid meet").replace(/^defer\s+/, "");
+  if (!/^none(?:\s|$)/.test(aspect)) {
+    const scale = /\bslice\b/.test(aspect) ? Math.max(sx, sy) : Math.min(sx, sy);
+    sx = sy = scale;
+    dx = (width - viewBox.w * scale) * (/xMin/.test(aspect) ? 0 : /xMax/.test(aspect) ? 1 : 0.5);
+    dy = (height - viewBox.h * scale) * (/YMin/.test(aspect) ? 0 : /YMax/.test(aspect) ? 1 : 0.5);
+  }
+  const ppiX = options.targetBox.w / options.materialSizeIn.width;
+  const ppiY = options.targetBox.h / options.materialSizeIn.height;
+  return {
+    a: sx * ppiX, b: 0, c: 0, d: sy * ppiY,
+    e: options.targetBox.x + (dx - viewBox.x * sx) * ppiX,
+    f: options.targetBox.y + (dy - viewBox.y * sy) * ppiY,
+  };
+}
 
 export function importSvgAsVectors(svgText: string, options: SvgImportOptions): SvgImportResult {
   const warnings: string[] = [];
@@ -323,12 +373,11 @@ export function importSvgAsVectors(svgText: string, options: SvgImportOptions): 
       const declaredStroke = child.getAttribute("stroke-width");
       const strokeScale = Math.sqrt(Math.abs(local.a * local.d - local.b * local.c)) || 1;
 
+      const strokeWidth = declaredStroke ? Number.parseFloat(declaredStroke) * strokeScale : 1.5;
       collected.push({
         name: label.slice(0, 40),
         mode: modeForElement(child, fallbackMode),
-        strokeWidth: declaredStroke
-          ? Math.min(8, Math.max(0.5, Number.parseFloat(declaredStroke) * strokeScale))
-          : 1.5,
+        strokeWidth: Number.isFinite(strokeWidth) ? strokeWidth : 1.5,
         subpaths,
       });
     }
@@ -357,9 +406,25 @@ export function importSvgAsVectors(svgText: string, options: SvgImportOptions): 
     };
   }
 
-  // Fit every element with one shared transform so relative positions survive.
   const allSubpaths = collected.flatMap((item) => item.subpaths);
   const source = subpathBounds(allSubpaths);
+  const placement = documentPlacement(root, options);
+  if (placement) {
+    const objects = collected.map((item) => objectFromSubpaths(
+      item.name, applyMatrixToSubpaths(item.subpaths, placement), item.mode,
+      Math.max(0, item.strokeWidth * Math.sqrt(Math.abs(placement.a * placement.d))),
+    ));
+    const bounds = subpathBounds(objects.flatMap((object) => object.subpaths));
+    const box = options.targetBox;
+    if (bounds.x < box.x - 0.01 || bounds.y < box.y - 0.01 ||
+        bounds.x + bounds.w > box.x + box.w + 0.01 || bounds.y + bounds.h > box.y + box.h + 0.01) {
+      warnings.push("Artwork extends beyond the material. Its declared size and origin were kept; reposition or resize it before export.");
+    }
+    return { objects, warnings, sourceBounds: { w: source.w, h: source.h }, actualSize: true };
+  }
+  if (options.materialSizeIn) {
+    warnings.push("The SVG has no supported absolute document size. Artwork was fitted to the material; check its dimensions before engraving.");
+  }
   const safeW = source.w > 0 ? source.w : 1;
   const safeH = source.h > 0 ? source.h : 1;
   const fit = Math.min(options.targetBox.w / safeW, options.targetBox.h / safeH);
@@ -369,7 +434,7 @@ export function importSvgAsVectors(svgText: string, options: SvgImportOptions): 
   const objects = collected.map((item) => {
     const scaled = scaleSubpaths(item.subpaths, { x: 0, y: 0 }, fit, fit);
     const placed = translateSubpaths(scaled, offsetX - source.x * fit, offsetY - source.y * fit);
-    return objectFromSubpaths(item.name, placed, item.mode, item.strokeWidth);
+    return objectFromSubpaths(item.name, placed, item.mode, Math.min(8, Math.max(0.5, item.strokeWidth)));
   });
 
   return { objects, warnings, sourceBounds: { w: source.w, h: source.h } };

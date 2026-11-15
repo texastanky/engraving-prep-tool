@@ -1,8 +1,113 @@
 import { describe, expect, it } from "vitest";
 import { importSvgAsVectors, multiply, parseTransform, shapeToPathData } from "./svg-import.ts";
-import { objectBounds, subpathBounds } from "./vector-path.ts";
+import { objectBounds, subpathBounds, objectFromSubpaths, rectSubpaths } from "./vector-path.ts";
+import { buildVectorSvg } from "./vector-export.ts";
 
 const BOX = { x: 0, y: 0, w: 200, h: 200 };
+
+describe("actual-size SVG placement", () => {
+  const options = {
+    targetBox: { x: 0, y: 0, w: 1200, h: 720 },
+    materialSizeIn: { width: 5, height: 3 },
+  };
+
+  it.each(["5in", "5.in", "12.7cm", "127mm", "360pt", "30pc", "480px", "480"])(
+    "honors document width %s and keeps the document origin", (width) => {
+      const result = importSvgAsVectors(`<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="3in" viewBox="0 0 500 300">
+        <rect x="100" y="50" width="200" height="100" fill="#000"/></svg>`, options);
+      expect(result.actualSize).toBe(true);
+      expect(result.warnings).toEqual([]);
+      const bounds = objectBounds(result.objects[0]);
+      expect(bounds.x).toBeCloseTo(240);
+      expect(bounds.y).toBeCloseTo(120);
+      expect(bounds.w).toBeCloseTo(480);
+      expect(bounds.h).toBeCloseTo(240);
+    },
+  );
+
+  it("maps pixels at 96 dpi when the SVG has no viewBox", () => {
+    const result = importSvgAsVectors(`<svg width="2in" height="1in"><rect x="48" y="24" width="96" height="48"/></svg>`, options);
+    expect(objectBounds(result.objects[0])).toMatchObject({ x: 120, y: 60, w: 240, h: 120 });
+  });
+
+  it.each([
+    ["xMidYMid meet", 250, 500],
+    ["xMinYMax meet", 500, 500],
+    ["none", 0, 1000],
+  ])("preserves viewBox origin and %s alignment", (aspect, y, h) => {
+    const result = importSvgAsVectors(`<svg width="100mm" height="100mm" viewBox="10 20 100 50" preserveAspectRatio="${aspect}">
+      <rect x="10" y="20" width="100" height="50"/></svg>`, {
+      targetBox: { x: 0, y: 0, w: 1000, h: 1000 }, materialSizeIn: { width: 100 / 25.4, height: 100 / 25.4 },
+    });
+    const bounds = objectBounds(result.objects[0]);
+    expect(bounds.x).toBeCloseTo(0);
+    expect(bounds.y).toBeCloseTo(y);
+    expect(bounds.w).toBeCloseTo(1000);
+    expect(bounds.h).toBeCloseTo(h);
+  });
+
+  it("infers a missing physical dimension from the viewBox aspect", () => {
+    const result = importSvgAsVectors(`<svg width="5in" viewBox="0 0 500 300"><rect x="100" y="50" width="200" height="100"/></svg>`, options);
+    expect(result.actualSize).toBe(true);
+    expect(objectBounds(result.objects[0]).w).toBeCloseTo(480);
+  });
+
+  it("fits unmeasured artwork with an explicit warning instead of claiming actual size", () => {
+    const result = importSvgAsVectors(`<svg viewBox="0 0 100 50"><rect width="100" height="50"/></svg>`, options);
+    expect(result.actualSize).not.toBe(true);
+    expect(result.warnings.join(" ")).toMatch(/no supported absolute document size/);
+    expect(objectBounds(result.objects[0]).w).toBeCloseTo(1200);
+  });
+
+  it("does not infer an absolute size from a percentage or unsupported unit", () => {
+    for (const width of ["100%", "5em"]) {
+      const result = importSvgAsVectors(`<svg width="${width}" height="3in" viewBox="0 0 500 300">
+        <rect width="500" height="300"/></svg>`, options);
+      expect(result.actualSize).not.toBe(true);
+      expect(result.warnings.join(" ")).toMatch(/no supported absolute document size/);
+    }
+  });
+
+  it("keeps oversized artwork at its declared size and warns instead of silently shrinking it", () => {
+    const result = importSvgAsVectors(`<svg width="10in" height="6in" viewBox="0 0 100 60"><rect width="100" height="60"/></svg>`, options);
+    expect(objectBounds(result.objects[0]).w).toBeCloseTo(2400);
+    expect(result.warnings.join(" ")).toMatch(/extends beyond the material/);
+  });
+
+  it("keeps nested transforms, operation groups and physical stroke width", () => {
+    const result = importSvgAsVectors(`<svg width="5in" height="3in" viewBox="0 0 127 76.2">
+      <g transform="translate(25.4 12.7)" data-operation="score">
+        <path d="M0 0h25.4" fill="none" stroke="blue" stroke-width="0.1"/>
+      </g></svg>`, options);
+    expect(result.objects[0].mode).toBe("score");
+    expect(objectBounds(result.objects[0]).x).toBeCloseTo(240);
+    expect(objectBounds(result.objects[0]).y).toBeCloseTo(120);
+    expect(result.objects[0].strokeWidth / 240 * 25.4).toBeCloseTo(0.1);
+  });
+
+  it("round-trips an exported job at another canvas size without moving or enlarging the shapes", () => {
+    const original = ["cut", "score", "engrave"].map((mode, index) => objectFromSubpaths(
+      mode, rectSubpaths(75 + index * 90, 55 + index * 30, 70, 45),
+      mode as "cut" | "score" | "engrave", 1.5,
+    ));
+    const exported = buildVectorSvg({
+      objects: original, displayWidth: 612, displayHeight: 367, materialWidthIn: 5, materialHeightIn: 3,
+    });
+    const imported = importSvgAsVectors(exported.svg, {
+      targetBox: { x: 0, y: 0, w: 820, h: 492 }, materialSizeIn: { width: 5, height: 3 },
+    });
+    expect(imported.actualSize).toBe(true);
+    expect(imported.objects).toHaveLength(3);
+    for (const object of original) {
+      const before = objectBounds(object);
+      const after = objectBounds(imported.objects.find((item) => item.mode === object.mode)!);
+      expect(after.x / 820 * 127).toBeCloseTo(before.x / 612 * 127, 2);
+      expect(after.y / 492 * 76.2).toBeCloseTo(before.y / 367 * 76.2, 2);
+      expect(after.w / 820 * 127).toBeCloseTo(before.w / 612 * 127, 2);
+      expect(after.h / 492 * 76.2).toBeCloseTo(before.h / 367 * 76.2, 2);
+    }
+  });
+});
 
 function parseOne(svg: string) {
   return new DOMParser().parseFromString(svg, "image/svg+xml").documentElement;

@@ -40,3 +40,19 @@ project, changing the placement, and opening the downloaded file. Confirm both
 Cancel and Replace behavior. Repeat after resizing the window, and compare
 physical dimensions. Windows installation and native close-dialog verification
 still require a Windows build/run; the unit test checks the close-handler logic.
+
+## Importing output SVGs
+
+Editable SVG import preserves the document's absolute physical dimensions and
+page origin when its root has supported dimensions (mm, cm, in, pt, pc, px, or
+unitless SVG pixels at 96 dpi). `viewBox` origin and aspect alignment are applied.
+Cut/score/engrave operation groups from this editor are retained.
+
+Art without an absolute document size is fitted with a warning rather than
+labelled actual-size. Art that extends past the material is not silently shrunk;
+the app warns so it can be repositioned or resized intentionally. SVG import
+does not replace Open Project for restoring images, filters or masks.
+
+The header controls wrap and reference panels stack on narrow browser windows,
+including when the beside-canvas panel option is selected. Phone viewport checks are
+not certification of real iOS/Android touch, file-picker or download behavior.
