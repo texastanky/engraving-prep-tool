@@ -3877,7 +3877,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
     });
   }, [gatedExport, getExportCanvas, material]);
 
-  const canExport = !!(partPhoto || design || penTracePoints.length > 1);
+  const canExport = !!(partPhoto || design || penTracePoints.length > 1 || vectorObjects.length);
 
   // --- Resize handle drag logic ---
   const handleResizeMouseDown = useCallback(
@@ -4781,6 +4781,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
         const startedAt = performance.now();
         const result = importSvgAsVectors(text, {
           targetBox: { x: 0, y: 0, w: displayWidth, h: displayHeight },
+          materialSizeIn: { width: material.widthIn, height: material.heightIn },
         });
 
         // Refused outright: say why and what to do, rather than importing part of
@@ -4802,14 +4803,14 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
           // Only worth mentioning on imports big enough to have felt slow.
           const timing = result.objects.length > 200 ? ` in ${seconds.toFixed(1)}s` : "";
           toast.success(
-            `Imported ${result.objects.length} editable shape${result.objects.length === 1 ? "" : "s"}${timing}`
+            `Imported ${result.objects.length} editable shape${result.objects.length === 1 ? "" : "s"}${result.actualSize ? " at actual size" : ""}${timing}`
           );
         }
       } catch {
         toast.error("Could not read that file as SVG");
       }
     },
-    [displayWidth, displayHeight, applyVectorChange, setSelectedVectorId]
+    [displayWidth, displayHeight, material.widthIn, material.heightIn, applyVectorChange, setSelectedVectorId]
   );
 
   /** Node editing: drag an anchor, carrying its handles with it. */
@@ -5510,15 +5511,15 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
 
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-card px-4 py-3 shrink-0">
-        <div className="mx-auto max-w-7xl flex items-center justify-between gap-4">
+        <div className="mx-auto max-w-7xl flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
             <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="font-serif text-base sm:text-lg font-bold truncate">{t("editor.title")}</h1>
-            <span className="hidden sm:inline text-[10px] text-muted-foreground">{t("editor.tagline")}</span>
+            <span className="hidden xl:inline text-[10px] text-muted-foreground">{t("editor.tagline")}</span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             {/* Undo / Redo */}
             <Tooltip>
               <TooltipTrigger asChild>
