@@ -35,7 +35,10 @@ function project(): EngravingProject {
   };
 }
 
-afterEach(() => vi.unstubAllGlobals());
+afterEach(() => {
+  vi.unstubAllGlobals();
+  vi.restoreAllMocks();
+});
 
 describe("portable engraving projects", () => {
   it("round-trips artwork, exact coordinates, vectors, masks, warp, photos and traces", () => {
@@ -100,6 +103,25 @@ describe("portable engraving projects", () => {
   it("reports inaccessible sources rather than producing an incomplete file", async () => {
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: false }));
     await expect(portableImage("blob:expired")).rejects.toThrow(/could not be included/);
+  });
+
+  it("embeds a browser-decoded image when its file had no MIME type", async () => {
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true, blob: async () => new Blob(["image-bytes"], { type: "application/octet-stream" }),
+    }));
+    class DecodedImage {
+      naturalWidth = 240;
+      naturalHeight = 160;
+      onload?: () => void;
+      set src(_source: string) { queueMicrotask(() => this.onload?.()); }
+    }
+    vi.stubGlobal("Image", DecodedImage);
+    const draw = vi.fn();
+    vi.spyOn(HTMLCanvasElement.prototype, "getContext")
+      .mockReturnValue({ drawImage: draw } as unknown as CanvasRenderingContext2D);
+    vi.spyOn(HTMLCanvasElement.prototype, "toDataURL").mockReturnValue(image);
+    expect(await portableImage("data:application/octet-stream;base64,aGVsbG8=")).toBe(image);
+    expect(draw).toHaveBeenCalledOnce();
   });
 
   it("reports corrupt embedded images before a project can replace the workspace", async () => {

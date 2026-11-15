@@ -88,7 +88,19 @@ export async function portableImage(source: string): Promise<string> {
     reader.onload = () => {
       const result = imageSource.safeParse(reader.result);
       if (result.success) resolve(result.data);
-      else reject(new Error("An image could not be included. Your project was not saved."));
+      else {
+        // File pickers can omit the MIME type even when the browser decoded the image.
+        void decodeProjectImage(source).then((image) => {
+          if (!image) throw new Error("The image could not be decoded.");
+          const canvas = document.createElement("canvas");
+          canvas.width = image.naturalWidth;
+          canvas.height = image.naturalHeight;
+          const context = canvas.getContext("2d");
+          if (!context) throw new Error("The image could not be embedded.");
+          context.drawImage(image, 0, 0);
+          resolve(canvas.toDataURL("image/png"));
+        }).catch(() => reject(new Error("An image could not be included. Your project was not saved.")));
+      }
     };
     reader.onerror = () => reject(new Error("An image could not be read. Your project was not saved."));
     reader.readAsDataURL(blob);

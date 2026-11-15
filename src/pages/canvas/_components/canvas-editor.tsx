@@ -2333,12 +2333,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   }, [projectFingerprint, designSrc, partPhotoSrc, projectOpenRevision]);
 
   useEffect(() => {
-    if (!projectDirty) return;
     const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!projectDirtyRef.current) return;
       event.preventDefault();
       event.returnValue = "";
     };
     const beforeNavigate = (event: MouseEvent) => {
+      if (!projectDirtyRef.current) return;
       const link = event.target instanceof Element ? event.target.closest("a") : null;
       if (!link || link.download || link.target === "_blank") return;
       const url = new URL(link.href);
@@ -2354,7 +2355,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
       window.removeEventListener("beforeunload", beforeUnload);
       document.removeEventListener("click", beforeNavigate, true);
     };
-  }, [projectDirty]);
+  }, []);
 
   const saveProject = async () => {
     setProjectBusy(true);
@@ -5623,12 +5624,6 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
               <span className="hidden sm:inline">Guide</span>
             </Button>
             {/* Panels toggle — moves reference tools beside the canvas. */}
-            <Button size="sm" variant="secondary" disabled={projectBusy} onClick={() => { void saveProject(); }}>
-              <Save className="mr-1 h-3.5 w-3.5" />Save Project
-            </Button>
-            <span className="text-xs text-muted-foreground" role="status">
-              {projectBusy ? "Project file…" : projectDirty ? "Unsaved project" : savedProjectCheckpoint ? "Project file ready" : "Save a project to keep artwork"}
-            </span>
             <Button
               variant={referenceRailOpen ? "default" : "secondary"}
               size="sm"
@@ -5699,6 +5694,17 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                 {/* Menu bar — the tools, grouped, so nothing has to be hunted for by
                     scrolling a side panel. Every entry mirrors a button that still exists
                     below, sharing its handler and its disabled state. */}
+                <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 pt-2">
+                  <Button size="sm" variant="secondary" disabled={projectBusy} onClick={() => { void saveProject(); }}>
+                    <Save className="mr-1 h-3.5 w-3.5" />Save Project
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={projectBusy} onClick={() => projectInputRef.current?.click()}>
+                    <FolderOpen className="mr-1 h-3.5 w-3.5" />Open Project
+                  </Button>
+                  <span className="text-xs text-muted-foreground" role="status">
+                    {projectBusy ? "Project file…" : projectDirty ? "Unsaved project" : savedProjectCheckpoint ? "Project file ready" : "Save a project to keep artwork"}
+                  </span>
+                </div>
                 <nav className="mx-auto flex max-w-7xl flex-wrap items-center gap-0.5 pt-1.5" data-menu-bar>
                   {menuGroups.map((group) => (
                     <DropdownMenu key={group.id}>
