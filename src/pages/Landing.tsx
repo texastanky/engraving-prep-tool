@@ -174,8 +174,8 @@ export default function Landing() {
                 size
               </li>
               <li>
-                No internet connection required to work, once a licence is
-                activated
+                No licence key or internet connection required for local editing
+                and exports
               </li>
             </ul>
           </div>
@@ -186,19 +186,19 @@ export default function Landing() {
         <h2 className="font-serif text-2xl font-bold">Pricing</h2>
         <div className="mt-6 max-w-md">
           <div className="rounded-lg border border-primary/40 bg-card p-5">
-            <h3 className="text-sm font-semibold">Licensed</h3>
+            <h3 className="text-sm font-semibold">Development access</h3>
             <p className="mt-1 font-serif text-3xl font-bold">Contact us</p>
             <p className="mt-2 text-xs text-muted-foreground">
-              A licence key unlocks the app on your machine: the full toolset,
-              unlimited exports, and offline use — no account and no internet
-              connection once the key is entered. Email{" "}
+              The editor and local exports are currently available without a licence key.
+              Server-side AI features still require a valid licence and service configuration.
+              Email{" "}
               <a
                 className="text-primary hover:underline"
                 href="mailto:support@forgemarkindustries.com"
               >
                 support@forgemarkindustries.com
               </a>{" "}
-              for current pricing and a licence key.
+              for release and pricing information.
             </p>
           </div>
         </div>
