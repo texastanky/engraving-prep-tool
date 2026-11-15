@@ -75,7 +75,8 @@ import AiComposePanel from "./ai-compose-panel.tsx";
 import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.tsx";
 import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
-import XtoolSettingsConverterPanel from "./xtool-settings-converter.tsx";
+import ConverterPresetTransfer from "./converter-preset-transfer.tsx";
+import { decodeProjectImage, MAX_PROJECT_BYTES, parseProject, portableImage, type EngravingProject } from "./project-file.ts";
 import {
   useCustomPresets,
   type CustomPreset,
@@ -1107,6 +1108,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [eraserActive, setEraserActive] = useState(false);
   const [eraserSize, setEraserSize] = useState(30); // brush radius in display pixels
   const eraserMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const [eraserRevision, setEraserRevision] = useState(0);
   const [warpMode, setWarpMode] = useState(false);
   const [penTraceActive, setPenTraceActive] = useState(false);
   const [penTracePoints, setPenTracePoints] = useState<Pt[]>([]);
@@ -1245,6 +1247,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // Picking a keep-out up straight off the canvas: click it, drag, release.
   const keepOutDragRef = useRef<{ index: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const [manualBoxSize, setManualBoxSize] = useState<{ w: number; h: number } | null>(null);
+  const [projectCanvasSize, setProjectCanvasSize] = useState<{ width: number; height: number; material: MaterialSize } | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectOpenRevision, setProjectOpenRevision] = useState(0);
+  const [savedProjectCheckpoint, setSavedProjectCheckpoint] = useState<{
+    fingerprint: string; designSrc: string | null; partPhotoSrc: string | null;
+  } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
   // Design real-world size inputs (in current unit)
@@ -1414,6 +1422,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const partInputRef = useRef<HTMLInputElement>(null);
   const designInputRef = useRef<HTMLInputElement>(null);
   const vectorImportRef = useRef<HTMLInputElement>(null);
+  const projectInputRef = useRef<HTMLInputElement>(null);
   const resizeDragRef = useRef<ResizeDragState | null>(null);
 
   // Design bounding-box resize
@@ -1560,6 +1569,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   if (displayHeight > maxH) {
     displayHeight = maxH;
     displayWidth = Math.round(displayHeight * materialRatio);
+  }
+  // Project coordinates stay in their saved canvas space, regardless of monitor size.
+  if (projectCanvasSize &&
+      projectCanvasSize.material.widthIn === material.widthIn &&
+      projectCanvasSize.material.heightIn === material.heightIn) {
+    displayWidth = projectCanvasSize.width;
+    displayHeight = projectCanvasSize.height;
   }
   
   // The box the workspace is drawn into: the room actually available, or the size
@@ -2293,6 +2309,166 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadDesign]);
 
+  const projectFingerprint = useMemo(() => JSON.stringify({
+    unit, material, selectedPresetId, showRuler, resizeMode, partRotation,
+    canvas: design || vectorObjects.length || penTracePoints.length ? { width: displayWidth, height: displayHeight } : null,
+    design: design ? { ...design, element: undefined } : null,
+    vectorObjects, penTracePoints, penTraceClosed, penTraceStyle, clipDesignToTrace, eraserRevision,
+  }), [unit, material, selectedPresetId, showRuler, resizeMode, partRotation, displayWidth, displayHeight,
+    design, vectorObjects, penTracePoints, penTraceClosed, penTraceStyle, clipDesignToTrace, eraserRevision]);
+  const initialProjectFingerprint = useRef(projectFingerprint);
+  const projectDirty = savedProjectCheckpoint
+    ? projectFingerprint !== savedProjectCheckpoint.fingerprint ||
+      designSrc !== savedProjectCheckpoint.designSrc || partPhotoSrc !== savedProjectCheckpoint.partPhotoSrc
+    : projectFingerprint !== initialProjectFingerprint.current ||
+      Boolean(designSrc || partPhotoSrc || vectorObjects.length || penTracePoints.length);
+  const projectDirtyRef = useRef(projectDirty);
+  projectDirtyRef.current = projectDirty;
+  const pendingProjectCheckpoint = useRef(false);
+
+  useEffect(() => {
+    if (!pendingProjectCheckpoint.current) return;
+    pendingProjectCheckpoint.current = false;
+    setSavedProjectCheckpoint({ fingerprint: projectFingerprint, designSrc, partPhotoSrc });
+  }, [projectFingerprint, designSrc, partPhotoSrc, projectOpenRevision]);
+
+  useEffect(() => {
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      if (!projectDirtyRef.current) return;
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const beforeNavigate = (event: MouseEvent) => {
+      if (!projectDirtyRef.current) return;
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (!link || link.download || link.target === "_blank") return;
+      const url = new URL(link.href);
+      if (url.origin === location.origin && url.pathname === location.pathname) return;
+      if (!window.confirm("Leave without saving your project file? Unsaved artwork and placement will be lost.")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", beforeNavigate, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", beforeNavigate, true);
+    };
+  }, []);
+
+  const saveProject = async () => {
+    setProjectBusy(true);
+    try {
+      const savedDesign = design ? { ...design, element: undefined } : null;
+      const eraserMaskSrc = design ? eraserMaskRef.current?.toDataURL("image/png") ?? null : null;
+      const [embeddedDesign, embeddedPart] = await Promise.all([
+        design ? portableImage(design.element.currentSrc || design.element.src) : Promise.resolve(null),
+        partPhoto ? portableImage(partPhoto.currentSrc || partPhoto.src) : Promise.resolve(null),
+      ]);
+      const project: EngravingProject = {
+        app: "engraving-prep-tool", version: 1, unit, material,
+        canvas: { width: displayWidth, height: displayHeight },
+        selectedPresetId, showRuler, resizeMode, partRotation,
+        designSrc: embeddedDesign, partPhotoSrc: embeddedPart,
+        designState: savedDesign, eraserMaskSrc, vectorObjects,
+        trace: { points: penTracePoints, closed: penTraceClosed, style: penTraceStyle, clipDesign: clipDesignToTrace },
+      };
+      const json = JSON.stringify(project);
+      parseProject(json);
+      const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "engraving-project.engraving-project.json";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSavedProjectCheckpoint({ fingerprint: projectFingerprint, designSrc, partPhotoSrc });
+      toast.success("Project download started. Keep the .engraving-project.json file to reopen your work.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Your project could not be saved.");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
+  const openProject = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setProjectBusy(true);
+    try {
+      if (file.size > MAX_PROJECT_BYTES) throw new Error("Project files must be under 80 MB.");
+      const project = parseProject(await file.text());
+      const [image, photo, eraser] = await Promise.all([
+        decodeProjectImage(project.designSrc), decodeProjectImage(project.partPhotoSrc),
+        decodeProjectImage(project.eraserMaskSrc),
+      ]);
+      if (projectDirtyRef.current && !window.confirm("Replace your current work? Save a project file first if you want to keep it.")) return;
+      let eraserCanvas: HTMLCanvasElement | null = null;
+      if (eraser) {
+        eraserCanvas = document.createElement("canvas");
+        eraserCanvas.width = eraser.naturalWidth;
+        eraserCanvas.height = eraser.naturalHeight;
+        const context = eraserCanvas.getContext("2d");
+        if (!context) throw new Error("The eraser mask could not be restored. Your current work was not changed.");
+        context.drawImage(eraser, 0, 0);
+      }
+      const nextDesign = image && project.designState ? { ...project.designState, element: image } : null;
+      setUnit(project.unit);
+      setMaterial(project.material);
+      setSelectedPresetId(project.selectedPresetId);
+      setShowRuler(project.showRuler);
+      setResizeMode(project.resizeMode);
+      setManualBoxSize(null);
+      setProjectCanvasSize({ ...project.canvas, material: project.material });
+      setPartPhoto(photo);
+      setPartPhotoSrc(project.partPhotoSrc);
+      setPartRotation(project.partRotation);
+      setDesign(nextDesign);
+      setDesignSrc(project.designSrc);
+      if (nextDesign) {
+        const widthIn = nextDesign.naturalWidth * nextDesign.scale * nextDesign.scaleX / project.canvas.width * project.material.widthIn;
+        const heightIn = nextDesign.naturalHeight * nextDesign.scale * nextDesign.scaleY / project.canvas.height * project.material.heightIn;
+        setDesignWidthInput(project.unit === "in" ? widthIn.toFixed(2) : inToMm(widthIn).toFixed(1));
+        setDesignHeightInput(project.unit === "in" ? heightIn.toFixed(2) : inToMm(heightIn).toFixed(1));
+      } else {
+        setDesignWidthInput("");
+        setDesignHeightInput("");
+      }
+      didRestoreDesign.current = true;
+      eraserMaskRef.current = eraserCanvas;
+      setEraserRevision(0);
+      setEraserActive(false);
+      setWarpMode(false);
+      setSelectedKeepOut(null);
+      setVectorObjects(project.vectorObjects);
+      setSelectedVectorIds([]);
+      setVectorDraft([]);
+      setVectorShapeDraft(null);
+      setPenTracePoints(project.trace.points);
+      setPenTraceClosed(project.trace.closed);
+      setPenTraceStyle(project.trace.style);
+      setClipDesignToTrace(project.trace.clipDesign);
+      setPenTraceActive(false);
+      setPenTraceHover(null);
+      latestDesignRef.current = nextDesign;
+      latestVectorRef.current = project.vectorObjects;
+      latestTraceRef.current = { points: project.trace.points, closed: project.trace.closed };
+      historyRef.current = [];
+      historyIndexRef.current = -1;
+      lastHistorySignatureRef.current = null;
+      pushHistory(currentSnapshot());
+      updateUndoRedoState();
+      pendingProjectCheckpoint.current = true;
+      setProjectOpenRevision((revision) => revision + 1);
+      toast.success("Project opened. Artwork, material, and placement restored.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The project could not be opened. Your current work was not changed.");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
   const readFile = useCallback((file: File, onLoad: (src: string) => void) => {
     const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
     const hasKnownImageExtension = /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
@@ -2625,6 +2801,7 @@ const handlePenTracePointMouseDown = useCallback(
     ctx.beginPath();
     ctx.arc(imgX, imgY, brushRadius, 0, Math.PI * 2);
     ctx.fill();
+    setEraserRevision((revision) => revision + 1);
   }, [design, eraserSize]);
 
   /** The keep-out under a point on the canvas, topmost first. */
@@ -3630,11 +3807,6 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
     toast.error(licenseErrorMessage(result.error ?? "malformed_key"));
   }, [licenseKeyInput]);
 
-  /**
-   * Export gate — checked here, on this machine. The key was verified when it
-   * was activated; an expired key blocks the export and the card offers the
-   * input to paste a current one.
-   */
   const gatedExport = useCallback(
     (doExport: () => void) => {
       const permission = exportPermission(entitlement);
@@ -3705,7 +3877,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
     });
   }, [gatedExport, getExportCanvas, material]);
 
-  const canExport = !!(partPhoto || design || penTracePoints.length > 1);
+  const canExport = !!(partPhoto || design || penTracePoints.length > 1 || vectorObjects.length);
 
   // --- Resize handle drag logic ---
   const handleResizeMouseDown = useCallback(
@@ -4609,6 +4781,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
         const startedAt = performance.now();
         const result = importSvgAsVectors(text, {
           targetBox: { x: 0, y: 0, w: displayWidth, h: displayHeight },
+          materialSizeIn: { width: material.widthIn, height: material.heightIn },
         });
 
         // Refused outright: say why and what to do, rather than importing part of
@@ -4630,14 +4803,14 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
           // Only worth mentioning on imports big enough to have felt slow.
           const timing = result.objects.length > 200 ? ` in ${seconds.toFixed(1)}s` : "";
           toast.success(
-            `Imported ${result.objects.length} editable shape${result.objects.length === 1 ? "" : "s"}${timing}`
+            `Imported ${result.objects.length} editable shape${result.objects.length === 1 ? "" : "s"}${result.actualSize ? " at actual size" : ""}${timing}`
           );
         }
       } catch {
         toast.error("Could not read that file as SVG");
       }
     },
-    [displayWidth, displayHeight, applyVectorChange, setSelectedVectorId]
+    [displayWidth, displayHeight, material.widthIn, material.heightIn, applyVectorChange, setSelectedVectorId]
   );
 
   /** Node editing: drag an anchor, carrying its handles with it. */
@@ -5106,7 +5279,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
    */
   const referencePanels = (
     <>
-                  <XtoolSettingsConverterPanel />
+                  <ConverterPresetTransfer />
                   {/* Templates — hidden entirely while the list is empty.
                       It is now deliberately empty: the previous contents were licensed
                       third-party design files that should not ship inside a product.
@@ -5202,6 +5375,9 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
         id: "file",
         label: t("menu.file"),
         items: [
+          { kind: "item", label: "Save Project…", icon: Save, onSelect: () => { void saveProject(); }, disabled: projectBusy },
+          { kind: "item", label: "Open Project…", icon: FolderOpen, onSelect: () => projectInputRef.current?.click(), disabled: projectBusy },
+          { kind: "separator" },
           { kind: "item", label: t("menu.file.importDesign"), icon: Upload, onSelect: () => designInputRef.current?.click() },
           { kind: "item", label: t("menu.file.importPart"), icon: ImageIcon, onSelect: () => partInputRef.current?.click() },
           { kind: "item", label: t("menu.file.importVector"), icon: PenTool, onSelect: () => vectorImportRef.current?.click() },
@@ -5296,6 +5472,8 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
   
   return (
   <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col">
+      <input ref={projectInputRef} type="file" accept=".engraving-project.json,application/json"
+        aria-label="Open engraving project file" onChange={openProject} className="hidden" />
       {cropOpen && designSrc && (
         <CropModal
           open={cropOpen}
@@ -5333,15 +5511,15 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
 
       {/* Header */}
       <header className="sticky top-0 z-50 border-b border-border bg-card px-4 py-3 shrink-0">
-        <div className="mx-auto max-w-7xl flex items-center justify-between gap-4">
+        <div className="mx-auto max-w-7xl flex flex-wrap items-center justify-between gap-2">
           <div className="flex items-center gap-3 min-w-0">
             <Link to="/" className="text-muted-foreground hover:text-foreground transition-colors shrink-0">
               <ArrowLeft className="h-4 w-4" />
             </Link>
             <h1 className="font-serif text-base sm:text-lg font-bold truncate">{t("editor.title")}</h1>
-            <span className="hidden sm:inline text-[10px] text-muted-foreground">{t("editor.tagline")}</span>
+            <span className="hidden xl:inline text-[10px] text-muted-foreground">{t("editor.tagline")}</span>
           </div>
-          <div className="flex items-center gap-2 shrink-0">
+          <div className="flex max-w-full flex-wrap items-center gap-2">
             {/* Undo / Redo */}
             <Tooltip>
               <TooltipTrigger asChild>
@@ -5446,8 +5624,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
               <Sparkles className="mr-1.5 h-4 w-4" />
               <span className="hidden sm:inline">Guide</span>
             </Button>
-            {/* Panels toggle — moves the reference tools (templates, AI compose,
-                converter) between the left column and a rail beside the canvas. */}
+            {/* Panels toggle — moves reference tools beside the canvas. */}
             <Button
               variant={referenceRailOpen ? "default" : "secondary"}
               size="sm"
@@ -5518,6 +5695,17 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                 {/* Menu bar — the tools, grouped, so nothing has to be hunted for by
                     scrolling a side panel. Every entry mirrors a button that still exists
                     below, sharing its handler and its disabled state. */}
+                <div className="mx-auto flex max-w-7xl flex-wrap items-center gap-2 pt-2">
+                  <Button size="sm" variant="secondary" disabled={projectBusy} onClick={() => { void saveProject(); }}>
+                    <Save className="mr-1 h-3.5 w-3.5" />Save Project
+                  </Button>
+                  <Button size="sm" variant="ghost" disabled={projectBusy} onClick={() => projectInputRef.current?.click()}>
+                    <FolderOpen className="mr-1 h-3.5 w-3.5" />Open Project
+                  </Button>
+                  <span className="text-xs text-muted-foreground" role="status">
+                    {projectBusy ? "Project file…" : projectDirty ? "Unsaved project" : savedProjectCheckpoint ? "Project file ready" : "Save a project to keep artwork"}
+                  </span>
+                </div>
                 <nav className="mx-auto flex max-w-7xl flex-wrap items-center gap-0.5 pt-1.5" data-menu-bar>
                   {menuGroups.map((group) => (
                     <DropdownMenu key={group.id}>
@@ -5554,7 +5742,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
                 </header>
 
       <div className="flex-1 mx-auto max-w-7xl w-full px-3 py-3 sm:px-4 sm:py-6">
-        <div className={`grid min-w-0 gap-4 sm:gap-6 ${referenceRailOpen ? "grid-cols-[280px_minmax(0,1fr)_280px]" : "lg:grid-cols-[280px_1fr]"}`}>
+        <div className={`grid grid-cols-1 min-w-0 gap-4 sm:gap-6 ${referenceRailOpen ? "lg:grid-cols-[280px_minmax(0,1fr)_280px]" : "lg:grid-cols-[280px_1fr]"}`}>
 
           {/* Reference rail — rendered only when there is room for a third column.
               `order-3` places it after the canvas and the left column even though
@@ -5562,7 +5750,7 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
           {referenceRailOpen && (
             <div
               data-reference-rail
-              className="flex min-w-0 w-[280px] flex-col gap-3 overflow-y-auto lg:max-h-[calc(100vh-100px)] lg:order-3"
+              className="flex min-w-0 w-full lg:w-[280px] flex-col gap-3 overflow-y-auto lg:max-h-[calc(100vh-100px)] lg:order-3"
             >
               {referencePanels}
             </div>
@@ -7745,15 +7933,17 @@ onClick={downloadPenTraceSvg}
             <div className="rounded-lg border border-border bg-card p-4 space-y-2">
               <div className="flex items-center justify-between">
                 <Label className="text-xs uppercase tracking-wider text-muted-foreground font-medium">
-                  Licence
+                  AI licence (optional)
                 </Label>
                 <span className="text-[10px] font-medium" data-license-status>
                   {entitlementLabel(entitlement)}
                 </span>
               </div>
 
-              {/* The gate only opens under a valid licence; this input is for a
-                  key that expires mid-session or for switching plans. */}
+              <p className="text-[10px] text-muted-foreground leading-relaxed">
+                Editing and local exports need no key. A valid licence is still required
+                for server-side AI features.
+              </p>
               {!isEntitlementValid(entitlement) && (
                 <div className="space-y-1.5">
                   <Input
@@ -7780,8 +7970,8 @@ onClick={downloadPenTraceSvg}
                     {licenseBusy ? "Activating…" : "Activate licence"}
                   </Button>
                   <p className="text-[10px] text-muted-foreground leading-relaxed">
-                    Paste the key you received with your purchase. It is checked on this machine
-                    and keeps the app working offline.
+                    If you have an AI licence key, activate it here. You can keep editing
+                    and exporting without one.
                   </p>
                 </div>
               )}

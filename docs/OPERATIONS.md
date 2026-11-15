@@ -1,5 +1,12 @@
 # Operations: licensing and shop setup
 
+## Current development access
+
+The editor and local exports currently work without a licence key. The signed
+licence system remains in place for server-side AI requests; no signing keys
+have been replaced. The historical paid-editor and export-gate descriptions
+below describe the previous release, not the current development access.
+
 This covers what a shop owner or the person running your servers needs. It is not
 legal advice, and nothing here determines whether a marking is compliant.
 

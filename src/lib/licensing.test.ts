@@ -234,14 +234,17 @@ describe("cached licence handling", () => {
     expect(entitlementLabel(expired)).toContain("expired");
   });
 
-  it("allows exports only under a valid licence", () => {
+  it("allows local exports without a licence or with an expired licence", () => {
     expect(exportPermission(paid)).toEqual({ allowed: true, plan: "pro" });
     expect(exportPermission(null)).toEqual({
-      allowed: false,
+      allowed: true,
       plan: "free",
-      reason: "license_required",
     });
-    expect(denialMessage(exportPermission(null))).toContain("licence");
+    expect(exportPermission({ ...paid, expiresAt: "2020-01-01T00:00:00.000Z" })).toEqual({
+      allowed: true,
+      plan: "free",
+    });
+    expect(denialMessage({ allowed: false, plan: "free", reason: "license_required" })).toContain("licence");
   });
 
   it("explains rejected keys in plain language", () => {
