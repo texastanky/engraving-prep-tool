@@ -1,4 +1,4 @@
-const { app, BrowserWindow, shell } = require("electron");
+const { app, BrowserWindow, dialog, shell } = require("electron");
 const fs = require("node:fs");
 const fsp = require("node:fs/promises");
 const http = require("node:http");
@@ -238,6 +238,18 @@ function createWindow(startUrl) {
   // dialog on every launch, in front of the canvas. The converter has its own
   // card in the sidebar, and the hash still works as a deep link when wanted.
   window.loadURL(`${startUrl}/canvas?desktop=1`);
+  window.webContents.on("will-prevent-unload", (event) => {
+    const choice = dialog.showMessageBoxSync(window, {
+      type: "warning",
+      buttons: ["Stay and save", "Leave without saving"],
+      defaultId: 0,
+      cancelId: 0,
+      title: "Unsaved project",
+      message: "Your project has unsaved artwork or changes.",
+      detail: "Use Save Project to keep a portable copy before closing.",
+    });
+    if (choice === 1) event.preventDefault();
+  });
 
   window.webContents.setWindowOpenHandler(({ url }) => {
     shell.openExternal(url);

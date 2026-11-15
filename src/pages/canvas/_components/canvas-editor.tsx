@@ -76,6 +76,7 @@ import CanvasAssistant, { type CanvasAssistantContext } from "./assistant-panel.
 import EngraveAiPanel from "./engrave-ai-panel.tsx";
 import TraceVectorize from "./trace-vectorize.tsx";
 import ConverterPresetTransfer from "./converter-preset-transfer.tsx";
+import { decodeProjectImage, MAX_PROJECT_BYTES, parseProject, portableImage, type EngravingProject } from "./project-file.ts";
 import {
   useCustomPresets,
   type CustomPreset,
@@ -1107,6 +1108,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const [eraserActive, setEraserActive] = useState(false);
   const [eraserSize, setEraserSize] = useState(30); // brush radius in display pixels
   const eraserMaskRef = useRef<HTMLCanvasElement | null>(null);
+  const [eraserRevision, setEraserRevision] = useState(0);
   const [warpMode, setWarpMode] = useState(false);
   const [penTraceActive, setPenTraceActive] = useState(false);
   const [penTracePoints, setPenTracePoints] = useState<Pt[]>([]);
@@ -1245,6 +1247,12 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // Picking a keep-out up straight off the canvas: click it, drag, release.
   const keepOutDragRef = useRef<{ index: number; startX: number; startY: number; originX: number; originY: number } | null>(null);
   const [manualBoxSize, setManualBoxSize] = useState<{ w: number; h: number } | null>(null);
+  const [projectCanvasSize, setProjectCanvasSize] = useState<{ width: number; height: number; material: MaterialSize } | null>(null);
+  const [projectBusy, setProjectBusy] = useState(false);
+  const [projectOpenRevision, setProjectOpenRevision] = useState(0);
+  const [savedProjectCheckpoint, setSavedProjectCheckpoint] = useState<{
+    fingerprint: string; designSrc: string | null; partPhotoSrc: string | null;
+  } | null>(null);
   // Saved design state (position/scale/filters) to restore after image loads — not persisted
   const savedDesignStateRef = useRef<SavedDesignState | null>(null);
   // Design real-world size inputs (in current unit)
@@ -1414,6 +1422,7 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   const partInputRef = useRef<HTMLInputElement>(null);
   const designInputRef = useRef<HTMLInputElement>(null);
   const vectorImportRef = useRef<HTMLInputElement>(null);
+  const projectInputRef = useRef<HTMLInputElement>(null);
   const resizeDragRef = useRef<ResizeDragState | null>(null);
 
   // Design bounding-box resize
@@ -1560,6 +1569,13 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   if (displayHeight > maxH) {
     displayHeight = maxH;
     displayWidth = Math.round(displayHeight * materialRatio);
+  }
+  // Project coordinates stay in their saved canvas space, regardless of monitor size.
+  if (projectCanvasSize &&
+      projectCanvasSize.material.widthIn === material.widthIn &&
+      projectCanvasSize.material.heightIn === material.heightIn) {
+    displayWidth = projectCanvasSize.width;
+    displayHeight = projectCanvasSize.height;
   }
   
   // The box the workspace is drawn into: the room actually available, or the size
@@ -2293,6 +2309,165 @@ export default function CanvasEditor({ initialLocale }: CanvasEditorProps = {}) 
   // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [loadDesign]);
 
+  const projectFingerprint = useMemo(() => JSON.stringify({
+    unit, material, selectedPresetId, showRuler, resizeMode, partRotation,
+    canvas: design || vectorObjects.length || penTracePoints.length ? { width: displayWidth, height: displayHeight } : null,
+    design: design ? { ...design, element: undefined } : null,
+    vectorObjects, penTracePoints, penTraceClosed, penTraceStyle, clipDesignToTrace, eraserRevision,
+  }), [unit, material, selectedPresetId, showRuler, resizeMode, partRotation, displayWidth, displayHeight,
+    design, vectorObjects, penTracePoints, penTraceClosed, penTraceStyle, clipDesignToTrace, eraserRevision]);
+  const initialProjectFingerprint = useRef(projectFingerprint);
+  const projectDirty = savedProjectCheckpoint
+    ? projectFingerprint !== savedProjectCheckpoint.fingerprint ||
+      designSrc !== savedProjectCheckpoint.designSrc || partPhotoSrc !== savedProjectCheckpoint.partPhotoSrc
+    : projectFingerprint !== initialProjectFingerprint.current ||
+      Boolean(designSrc || partPhotoSrc || vectorObjects.length || penTracePoints.length);
+  const projectDirtyRef = useRef(projectDirty);
+  projectDirtyRef.current = projectDirty;
+  const pendingProjectCheckpoint = useRef(false);
+
+  useEffect(() => {
+    if (!pendingProjectCheckpoint.current) return;
+    pendingProjectCheckpoint.current = false;
+    setSavedProjectCheckpoint({ fingerprint: projectFingerprint, designSrc, partPhotoSrc });
+  }, [projectFingerprint, designSrc, partPhotoSrc, projectOpenRevision]);
+
+  useEffect(() => {
+    if (!projectDirty) return;
+    const beforeUnload = (event: BeforeUnloadEvent) => {
+      event.preventDefault();
+      event.returnValue = "";
+    };
+    const beforeNavigate = (event: MouseEvent) => {
+      const link = event.target instanceof Element ? event.target.closest("a") : null;
+      if (!link || link.download || link.target === "_blank") return;
+      const url = new URL(link.href);
+      if (url.origin === location.origin && url.pathname === location.pathname) return;
+      if (!window.confirm("Leave without saving your project file? Unsaved artwork and placement will be lost.")) {
+        event.preventDefault();
+        event.stopPropagation();
+      }
+    };
+    window.addEventListener("beforeunload", beforeUnload);
+    document.addEventListener("click", beforeNavigate, true);
+    return () => {
+      window.removeEventListener("beforeunload", beforeUnload);
+      document.removeEventListener("click", beforeNavigate, true);
+    };
+  }, [projectDirty]);
+
+  const saveProject = async () => {
+    setProjectBusy(true);
+    try {
+      const savedDesign = design ? { ...design, element: undefined } : null;
+      const eraserMaskSrc = design ? eraserMaskRef.current?.toDataURL("image/png") ?? null : null;
+      const [embeddedDesign, embeddedPart] = await Promise.all([
+        design ? portableImage(design.element.currentSrc || design.element.src) : Promise.resolve(null),
+        partPhoto ? portableImage(partPhoto.currentSrc || partPhoto.src) : Promise.resolve(null),
+      ]);
+      const project: EngravingProject = {
+        app: "engraving-prep-tool", version: 1, unit, material,
+        canvas: { width: displayWidth, height: displayHeight },
+        selectedPresetId, showRuler, resizeMode, partRotation,
+        designSrc: embeddedDesign, partPhotoSrc: embeddedPart,
+        designState: savedDesign, eraserMaskSrc, vectorObjects,
+        trace: { points: penTracePoints, closed: penTraceClosed, style: penTraceStyle, clipDesign: clipDesignToTrace },
+      };
+      const json = JSON.stringify(project);
+      parseProject(json);
+      const url = URL.createObjectURL(new Blob([json], { type: "application/json" }));
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "engraving-project.engraving-project.json";
+      link.click();
+      window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      setSavedProjectCheckpoint({ fingerprint: projectFingerprint, designSrc, partPhotoSrc });
+      toast.success("Project download started. Keep the .engraving-project.json file to reopen your work.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "Your project could not be saved.");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
+  const openProject = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.currentTarget.files?.[0];
+    event.currentTarget.value = "";
+    if (!file) return;
+    setProjectBusy(true);
+    try {
+      if (file.size > MAX_PROJECT_BYTES) throw new Error("Project files must be under 80 MB.");
+      const project = parseProject(await file.text());
+      const [image, photo, eraser] = await Promise.all([
+        decodeProjectImage(project.designSrc), decodeProjectImage(project.partPhotoSrc),
+        decodeProjectImage(project.eraserMaskSrc),
+      ]);
+      if (projectDirtyRef.current && !window.confirm("Replace your current work? Save a project file first if you want to keep it.")) return;
+      let eraserCanvas: HTMLCanvasElement | null = null;
+      if (eraser) {
+        eraserCanvas = document.createElement("canvas");
+        eraserCanvas.width = eraser.naturalWidth;
+        eraserCanvas.height = eraser.naturalHeight;
+        const context = eraserCanvas.getContext("2d");
+        if (!context) throw new Error("The eraser mask could not be restored. Your current work was not changed.");
+        context.drawImage(eraser, 0, 0);
+      }
+      const nextDesign = image && project.designState ? { ...project.designState, element: image } : null;
+      setUnit(project.unit);
+      setMaterial(project.material);
+      setSelectedPresetId(project.selectedPresetId);
+      setShowRuler(project.showRuler);
+      setResizeMode(project.resizeMode);
+      setManualBoxSize(null);
+      setProjectCanvasSize({ ...project.canvas, material: project.material });
+      setPartPhoto(photo);
+      setPartPhotoSrc(project.partPhotoSrc);
+      setPartRotation(project.partRotation);
+      setDesign(nextDesign);
+      setDesignSrc(project.designSrc);
+      if (nextDesign) {
+        const widthIn = nextDesign.naturalWidth * nextDesign.scale * nextDesign.scaleX / project.canvas.width * project.material.widthIn;
+        const heightIn = nextDesign.naturalHeight * nextDesign.scale * nextDesign.scaleY / project.canvas.height * project.material.heightIn;
+        setDesignWidthInput(project.unit === "in" ? widthIn.toFixed(2) : inToMm(widthIn).toFixed(1));
+        setDesignHeightInput(project.unit === "in" ? heightIn.toFixed(2) : inToMm(heightIn).toFixed(1));
+      } else {
+        setDesignWidthInput("");
+        setDesignHeightInput("");
+      }
+      didRestoreDesign.current = true;
+      eraserMaskRef.current = eraserCanvas;
+      setEraserRevision(0);
+      setEraserActive(false);
+      setWarpMode(false);
+      setSelectedKeepOut(null);
+      setVectorObjects(project.vectorObjects);
+      setSelectedVectorIds([]);
+      setVectorDraft([]);
+      setVectorShapeDraft(null);
+      setPenTracePoints(project.trace.points);
+      setPenTraceClosed(project.trace.closed);
+      setPenTraceStyle(project.trace.style);
+      setClipDesignToTrace(project.trace.clipDesign);
+      setPenTraceActive(false);
+      setPenTraceHover(null);
+      latestDesignRef.current = nextDesign;
+      latestVectorRef.current = project.vectorObjects;
+      latestTraceRef.current = { points: project.trace.points, closed: project.trace.closed };
+      historyRef.current = [];
+      historyIndexRef.current = -1;
+      lastHistorySignatureRef.current = null;
+      pushHistory(currentSnapshot());
+      updateUndoRedoState();
+      pendingProjectCheckpoint.current = true;
+      setProjectOpenRevision((revision) => revision + 1);
+      toast.success("Project opened. Artwork, material, and placement restored.");
+    } catch (error) {
+      toast.error(error instanceof Error ? error.message : "The project could not be opened. Your current work was not changed.");
+    } finally {
+      setProjectBusy(false);
+    }
+  };
+
   const readFile = useCallback((file: File, onLoad: (src: string) => void) => {
     const isSvg = file.type === "image/svg+xml" || file.name.toLowerCase().endsWith(".svg");
     const hasKnownImageExtension = /\.(png|jpe?g|webp|gif|bmp|svg)$/i.test(file.name);
@@ -2625,6 +2800,7 @@ const handlePenTracePointMouseDown = useCallback(
     ctx.beginPath();
     ctx.arc(imgX, imgY, brushRadius, 0, Math.PI * 2);
     ctx.fill();
+    setEraserRevision((revision) => revision + 1);
   }, [design, eraserSize]);
 
   /** The keep-out under a point on the canvas, topmost first. */
@@ -5197,6 +5373,9 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
         id: "file",
         label: t("menu.file"),
         items: [
+          { kind: "item", label: "Save Project…", icon: Save, onSelect: () => { void saveProject(); }, disabled: projectBusy },
+          { kind: "item", label: "Open Project…", icon: FolderOpen, onSelect: () => projectInputRef.current?.click(), disabled: projectBusy },
+          { kind: "separator" },
           { kind: "item", label: t("menu.file.importDesign"), icon: Upload, onSelect: () => designInputRef.current?.click() },
           { kind: "item", label: t("menu.file.importPart"), icon: ImageIcon, onSelect: () => partInputRef.current?.click() },
           { kind: "item", label: t("menu.file.importVector"), icon: PenTool, onSelect: () => vectorImportRef.current?.click() },
@@ -5291,6 +5470,8 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
   
   return (
   <div className="min-h-screen overflow-x-hidden bg-background text-foreground flex flex-col">
+      <input ref={projectInputRef} type="file" accept=".engraving-project.json,application/json"
+        aria-label="Open engraving project file" onChange={openProject} className="hidden" />
       {cropOpen && designSrc && (
         <CropModal
           open={cropOpen}
@@ -5442,6 +5623,12 @@ clipToShapePath(g, design.mask, scaleX, scaleY);
               <span className="hidden sm:inline">Guide</span>
             </Button>
             {/* Panels toggle — moves reference tools beside the canvas. */}
+            <Button size="sm" variant="secondary" disabled={projectBusy} onClick={() => { void saveProject(); }}>
+              <Save className="mr-1 h-3.5 w-3.5" />Save Project
+            </Button>
+            <span className="text-xs text-muted-foreground" role="status">
+              {projectBusy ? "Project file…" : projectDirty ? "Unsaved project" : savedProjectCheckpoint ? "Project file ready" : "Save a project to keep artwork"}
+            </span>
             <Button
               variant={referenceRailOpen ? "default" : "secondary"}
               size="sm"
